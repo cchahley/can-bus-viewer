@@ -534,7 +534,21 @@ class CANViewer:
             else:
                 value = float(row_data["val_var"].get())
 
-            data = db_msg.encode({sig_name: value}, padding=True)
+            # cantools requires ALL signals in the message to be provided.
+            # Build a complete dict: default every signal to its minimum (or
+            # first choice), then override with the user's chosen value.
+            sig_data: dict = {}
+            for s in db_msg.signals:
+                if s.name == sig_name:
+                    sig_data[s.name] = value
+                elif s.choices:
+                    sig_data[s.name] = next(iter(s.choices.keys()), 0)
+                elif s.minimum is not None:
+                    sig_data[s.name] = s.minimum
+                else:
+                    sig_data[s.name] = 0
+
+            data = db_msg.encode(sig_data, padding=True)
             msg  = can.Message(
                 arbitration_id=db_msg.frame_id,
                 data=data,
