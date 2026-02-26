@@ -47,6 +47,9 @@ def _silence_stderr():
 
 
 class CANViewer:
+    _MAX_RAW_ROWS  = 2000   # max rows kept visible in the raw tree
+    _MAX_PER_CYCLE = 150    # max messages processed per 10 ms poll cycle
+
     def __init__(self, root):
         self.root = root
         self.root.title("CAN Bus Viewer")
@@ -55,7 +58,7 @@ class CANViewer:
 
         self.bus = None
         self.running = False
-        self.message_queue = queue.Queue()
+        self.message_queue = queue.Queue(maxsize=10_000)
         self.message_count = 0
         self.error_count = 0
 
@@ -83,6 +86,9 @@ class CANViewer:
         # Raw message buffer + filter (Feature 7)
         self._filter_var = tk.StringVar()
         self._raw_buffer: collections.deque = collections.deque(maxlen=5000)
+        self._raw_tree_count: int = 0     # rows currently in self.tree
+        self._filter_tokens: list = []    # cached tokens — updated only on filter change
+        self._msg_name_cache: dict = {}   # frame_id → msg name (built on DBC load)
 
         # Trace replay (Feature 4)
         self._replay_messages: list = []
@@ -95,6 +101,7 @@ class CANViewer:
         self._build_ui()
         self._scan_channels()
         self._poll_queue()
+        self._update_stats_labels()
 
     # ------------------------------------------------------------------ UI --
 
@@ -231,6 +238,7 @@ class CANViewer:
         raw_hsb.grid(row=1, column=0, sticky="ew")
         raw_frame.rowconfigure(0, weight=1)
         raw_frame.columnconfigure(0, weight=1)
+        self.tree.tag_configure("error", foreground="red")  # configured once here
 
         # Right: Symbolic — tree view, Message parent → Signal children
         sym_frame = ttk.LabelFrame(pane, text="Symbolic (DBC Decoded)")
@@ -813,6 +821,7 @@ class CANViewer:
         except Exception as exc:
             messagebox.showerror("DBC Error", str(exc))
             return
+        self._msg_name_cache = {m.frame_id: m.name for m in self.db.messages}
         self.dbc_var.set(
             f"DBC: {os.path.basename(filename)}  ({len(self.db.messages)} msgs)")
 
@@ -1046,6 +1055,8 @@ class CANViewer:
         self._prev_sig_values.clear()
         self._plot_buffers.clear()
         self._raw_buffer.clear()
+        self._raw_tree_count = 0
+        self._filter_tokens = []
         for aid in self._highlight_after_ids.values():
             self.root.after_cancel(aid)
         self._highlight_after_ids.clear()
@@ -1061,28 +1072,59 @@ class CANViewer:
             try:
                 msg = self.bus.recv(timeout=0.1)
                 if msg is not None:
-                    self.message_queue.put(msg)
+                    try:
+                        self.message_queue.put_nowait(msg)
+                    except queue.Full:
+                        pass  # drop message; GUI is processing too slowly
             except can.CanError as exc:
-                self.message_queue.put(("error", str(exc)))
+                try:
+                    self.message_queue.put_nowait(("error", str(exc)))
+                except queue.Full:
+                    pass
                 break
             except Exception as exc:
-                self.message_queue.put(("error", str(exc)))
+                try:
+                    self.message_queue.put_nowait(("error", str(exc)))
+                except queue.Full:
+                    pass
                 break
 
     # -------------------------------------------------- queue → GUI (tkinter)
 
     def _poll_queue(self):
-        try:
-            while True:
+        error_msg = None
+        for _ in range(self._MAX_PER_CYCLE):
+            try:
                 item = self.message_queue.get_nowait()
-                if isinstance(item, tuple) and item[0] == "error":
-                    messagebox.showerror("CAN Error", item[1])
-                    self._disconnect()
-                else:
-                    self._show_message(item)
-        except queue.Empty:
-            pass
+            except queue.Empty:
+                break
+            if isinstance(item, tuple) and item[0] == "error":
+                error_msg = item[1]
+                self._disconnect()
+                break
+            else:
+                self._show_message(item)
+        if error_msg:
+            self.bar_var.set(f"CAN Error: {error_msg}")
+        if self.autoscroll_var.get():
+            self.tree.yview_moveto(1.0)
         self.root.after(10, self._poll_queue)
+
+    def _insert_raw_row(self, values, tags=()):
+        """Insert a row into the raw tree, evicting the oldest when over the cap."""
+        if self._raw_tree_count >= self._MAX_RAW_ROWS:
+            children = self.tree.get_children()
+            if children:
+                self.tree.delete(children[0])
+                self._raw_tree_count -= 1
+        self.tree.insert("", tk.END, values=values, tags=tags)
+        self._raw_tree_count += 1
+
+    def _update_stats_labels(self):
+        """Refresh message/error counters in the toolbar — runs every 200 ms."""
+        self.count_var.set(f"Messages: {self.message_count}")
+        self.error_var.set(f"Errors: {self.error_count}")
+        self.root.after(200, self._update_stats_labels)
 
     def _show_message(self, msg: can.Message):
         now = time.time()
@@ -1091,39 +1133,27 @@ class CANViewer:
         rel = f"{now - self._trace_start:.3f}"
         ts  = datetime.now().strftime("%H:%M:%S.%f")[:-3]
 
-        tokens = self._get_filter_tokens()
+        tokens = self._filter_tokens  # use cached tokens — no re.split per message
 
         if msg.is_error_frame:
             data = " ".join(f"{b:02X}" for b in msg.data) if msg.data else ""
             # Error frames always buffered and shown (never filtered out)
             self._raw_buffer.append(
                 (ts, rel, "---", "ERR", "---", data, True))
-            self.tree.insert("", tk.END,
-                             values=(ts, rel, "---", "ERR", "---", data),
-                             tags=("error",))
-            self.tree.tag_configure("error", foreground="red")
+            self._insert_raw_row((ts, rel, "---", "ERR", "---", data), tags=("error",))
             self.error_count += 1
-            self.error_var.set(f"Errors: {self.error_count}")
         else:
             arb   = (f"0x{msg.arbitration_id:08X}" if msg.is_extended_id
                      else f"0x{msg.arbitration_id:03X}")
             frame = "EXT" if msg.is_extended_id else "STD"
             data  = " ".join(f"{b:02X}" for b in msg.data)
-            # Resolve message name for filter (best-effort)
-            msg_name = ""
-            if self.db:
-                try:
-                    msg_name = self.db.get_message_by_frame_id(
-                        msg.arbitration_id).name
-                except Exception:
-                    pass
+            # Name resolved from cache — no DB lookup in the hot path
+            msg_name = self._msg_name_cache.get(msg.arbitration_id, "")
             self._raw_buffer.append(
                 (ts, rel, arb, frame, msg.dlc, data, False))
             if not tokens or self._passes_filter(arb, data, msg_name, tokens):
-                self.tree.insert("", tk.END,
-                                 values=(ts, rel, arb, frame, msg.dlc, data))
+                self._insert_raw_row((ts, rel, arb, frame, msg.dlc, data))
             self.message_count += 1
-            self.count_var.set(f"Messages: {self.message_count}")
             self._decode_and_display(msg, ts, rel)
 
         if self.log_writer is not None:
@@ -1142,9 +1172,6 @@ class CANViewer:
                                              data])
             except Exception:
                 pass
-
-        if self.autoscroll_var.get():
-            self.tree.yview_moveto(1.0)
 
     # ─── highlight helpers ────────────────────────────────────────────────────
 
@@ -1172,21 +1199,17 @@ class CANViewer:
 
     def _on_filter_change(self):
         """Re-populate raw tree from buffer and apply sym-tree visibility."""
-        tokens = self._get_filter_tokens()
+        self._filter_tokens = self._get_filter_tokens()
+        tokens = self._filter_tokens
 
         # ── Raw tree rebuild from buffer ──────────────────────────────────────
         self.tree.delete(*self.tree.get_children())
+        self._raw_tree_count = 0
         for item in self._raw_buffer:
             ts, rel, arb, frame, dlc, data, is_error = item
             if is_error or not tokens or self._passes_filter(arb, data, "", tokens):
-                if is_error:
-                    self.tree.insert("", tk.END,
-                                     values=(ts, rel, arb, frame, dlc, data),
-                                     tags=("error",))
-                else:
-                    self.tree.insert("", tk.END,
-                                     values=(ts, rel, arb, frame, dlc, data))
-        self.tree.tag_configure("error", foreground="red")
+                tags = ("error",) if is_error else ()
+                self._insert_raw_row((ts, rel, arb, frame, dlc, data), tags)
         if self.autoscroll_var.get():
             self.tree.yview_moveto(1.0)
 

@@ -192,10 +192,13 @@ class TestShowMessage(unittest.TestCase):
 
     def test_count_label_updates(self):
         self.app._show_message(_normal_msg())
+        # Labels are updated by a periodic timer; flush it manually in tests.
+        self.app._update_stats_labels()
         self.assertEqual(self.app.count_var.get(), "Messages: 1")
 
     def test_error_label_updates(self):
         self.app._show_message(_error_msg())
+        self.app._update_stats_labels()
         self.assertEqual(self.app.error_var.get(), "Errors: 1")
 
 
