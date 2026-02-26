@@ -18,8 +18,8 @@ jobs:
         with:
           python-version: "3.14"
 
-      - name: Install system dependencies (tkinter)
-        run: sudo apt-get install -y python3-tk
+      - name: Install system dependencies (tkinter + virtual display)
+        run: sudo apt-get install -y python3-tk xvfb
 
       - name: Install Python dependencies
         run: pip install python-can cantools ruff mypy pytest
@@ -34,4 +34,4 @@ jobs:
         run: mypy can_viewer.py --ignore-missing-imports
 
       - name: Unit tests
-        run: python -m pytest test_can_viewer.py -v
+        run: xvfb-run python -m pytest test_can_viewer.py -v
