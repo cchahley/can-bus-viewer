@@ -373,6 +373,9 @@ class CANViewer:
             )
             self.bus.send(msg)
         except Exception as exc:
+            if row_data.get("periodic_var") and row_data["periodic_var"].get():
+                self._stop_periodic(row_data)
+                row_data["periodic_var"].set(False)
             messagebox.showerror("Send Error", str(exc))
 
     # ─── DBC send rows ────────────────────────────────────────────────────────
@@ -531,7 +534,9 @@ class CANViewer:
                     sig_data[sig.name] = 0.0
 
         try:
-            data = db_msg.encode(sig_data, padding=True)
+            # strict=False: encode available signals without requiring every
+            # codec-internal signal (e.g. multiplexed groups not in .signals).
+            data = db_msg.encode(sig_data, padding=True, strict=False)
             msg  = can.Message(
                 arbitration_id=db_msg.frame_id,
                 data=data,
@@ -539,6 +544,11 @@ class CANViewer:
             )
             self.bus.send(msg)
         except Exception as exc:
+            # Stop periodic BEFORE showing the popup so the modal dialog
+            # doesn't trigger another send (and another popup) while open.
+            if row_data.get("periodic_var") and row_data["periodic_var"].get():
+                self._stop_periodic(row_data)
+                row_data["periodic_var"].set(False)
             messagebox.showerror("Send Error", str(exc))
 
     # ─── periodic send (shared by raw and DBC rows) ───────────────────────────
