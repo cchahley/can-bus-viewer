@@ -4,8 +4,9 @@ Requires: pip install python-can
 """
 import contextlib
 import os
+import csv
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, filedialog
 import can
 import threading
 import queue
@@ -38,6 +39,9 @@ class CANViewer:
         self.message_queue = queue.Queue()
         self.message_count = 0
         self.error_count = 0
+        self.log_writer = None
+        self.log_file = None
+        self.log_format = None
 
         self._build_ui()
         self._scan_channels()
@@ -90,6 +94,9 @@ class CANViewer:
         self.autoscroll_var = tk.BooleanVar(value=True)
         ttk.Checkbutton(toolbar, text="Auto-scroll",
                          variable=self.autoscroll_var).pack(side=tk.LEFT, padx=4)
+
+        self.btn_log = ttk.Button(toolbar, text="Start Log", command=self._toggle_logging)
+        self.btn_log.pack(side=tk.LEFT, padx=(12, 4))
 
         self.error_var = tk.StringVar(value="Errors: 0")
         ttk.Label(toolbar, textvariable=self.error_var, foreground="red").pack(side=tk.RIGHT, padx=10)
@@ -155,6 +162,49 @@ class CANViewer:
     def _on_iface_change(self, _=None):
         self._scan_channels()
 
+    def _toggle_logging(self):
+        if self.log_writer is None:
+            self._start_logging()
+        else:
+            self._stop_logging()
+
+    def _start_logging(self):
+        filename = filedialog.asksaveasfilename(
+            title="Save CAN Trace",
+            filetypes=[("CSV files", "*.csv"), ("BLF files", "*.blf")],
+            defaultextension=".csv",
+        )
+        if not filename:
+            return
+        try:
+            if filename.lower().endswith(".blf"):
+                self.log_writer = can.BLFWriter(filename)
+                self.log_format = "blf"
+            else:
+                self.log_file = open(filename, "w", newline="")
+                self.log_writer = csv.writer(self.log_file)
+                self.log_writer.writerow(["Timestamp", "Arb ID", "Frame", "DLC", "Data"])
+                self.log_format = "csv"
+        except Exception as exc:
+            messagebox.showerror("Log Error", str(exc))
+            return
+        self.btn_log.config(text="Stop Log")
+        self.bar_var.set(f"Logging to: {filename}")
+
+    def _stop_logging(self):
+        try:
+            if self.log_format == "blf" and self.log_writer:
+                self.log_writer.stop()
+            elif self.log_file:
+                self.log_file.close()
+        except Exception:
+            pass
+        self.log_writer = None
+        self.log_file = None
+        self.log_format = None
+        self.btn_log.config(text="Start Log")
+        self.bar_var.set("Log saved")
+
     def _connect(self):
         iface   = self.iface_var.get()
         channel = self.channel_var.get()
@@ -197,6 +247,9 @@ class CANViewer:
             except Exception:
                 pass
             self.bus = None
+
+        if self.log_writer is not None:
+            self._stop_logging()
 
         self.btn_connect.config(state=tk.NORMAL)
         self.btn_disconnect.config(state=tk.DISABLED)
@@ -265,6 +318,22 @@ class CANViewer:
             self.tree.insert("", tk.END, values=(ts, arb, frame, msg.dlc, data))
             self.message_count += 1
             self.count_var.set(f"Messages: {self.message_count}")
+
+        if self.log_writer is not None:
+            try:
+                if self.log_format == "blf":
+                    self.log_writer(msg)
+                else:
+                    arb = ("---" if msg.is_error_frame
+                           else (f"0x{msg.arbitration_id:08X}" if msg.is_extended_id
+                                 else f"0x{msg.arbitration_id:03X}"))
+                    frame = "ERR" if msg.is_error_frame else ("EXT" if msg.is_extended_id else "STD")
+                    data = " ".join(f"{b:02X}" for b in msg.data)
+                    self.log_writer.writerow([ts, arb, frame,
+                                             "" if msg.is_error_frame else msg.dlc,
+                                             data])
+            except Exception:
+                pass
 
         if self.autoscroll_var.get():
             self.tree.yview_moveto(1.0)
