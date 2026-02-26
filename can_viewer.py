@@ -2,15 +2,26 @@
 CAN Bus Viewer - Supports PEAK (PCAN), Vector, and Virtual interfaces
 Requires: pip install python-can cantools
 """
+import collections
 import contextlib
 import csv
 import os
+import re
 import time
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 import threading
 import queue
 from datetime import datetime
+
+try:
+    import matplotlib
+    matplotlib.use("TkAgg")
+    from matplotlib.figure import Figure
+    from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+    _MATPLOTLIB_AVAILABLE = True
+except ImportError:
+    _MATPLOTLIB_AVAILABLE = False
 
 import can
 
@@ -58,6 +69,28 @@ class CANViewer:
         self._trace_start: float | None = None
         self._send_rows: list = []       # raw send rows
         self._dbc_send_rows: list = []   # DBC send rows
+
+        # Signal statistics (Features 5, 6)
+        self._signal_stats: dict = {}        # (arb_id, sig_name) → {min, max, count}
+        self._prev_sig_values: dict = {}     # (arb_id, sig_name) → last val_str
+        self._highlight_after_ids: dict = {} # treeview iid → after-job id
+
+        # Signal plot (Feature 3)
+        self._plot_buffers: dict = {}        # "Msg.Sig" → deque of float values
+        self._plot_win = None
+        self._plot_active_signals: list = []
+
+        # Raw message buffer + filter (Feature 7)
+        self._filter_var = tk.StringVar()
+        self._raw_buffer: collections.deque = collections.deque(maxlen=5000)
+
+        # Trace replay (Feature 4)
+        self._replay_messages: list = []
+        self._replay_speed_var = tk.StringVar(value="1.0")
+
+        # Dark mode (Feature 2)
+        self._dark_mode = False
+        self._original_theme = ttk.Style().theme_use()
 
         self._build_ui()
         self._scan_channels()
@@ -130,12 +163,42 @@ class CANViewer:
         ttk.Label(toolbar, textvariable=self.dbc_var,
                   foreground="gray").pack(side=tk.LEFT, padx=4)
 
+        ttk.Separator(toolbar, orient=tk.VERTICAL).pack(
+            side=tk.LEFT, fill=tk.Y, padx=8, pady=2)
+
+        self._highlight_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(toolbar, text="Highlight changes",
+                        variable=self._highlight_var).pack(side=tk.LEFT, padx=4)
+
+        self.btn_dark = ttk.Button(toolbar, text="Dark Mode",
+                                   command=self._toggle_dark_mode)
+        self.btn_dark.pack(side=tk.LEFT, padx=4)
+
+        ttk.Button(toolbar, text="Signal Plot",
+                   command=self._open_plot_window).pack(side=tk.LEFT, padx=4)
+        ttk.Button(toolbar, text="Import Trace",
+                   command=self._open_replay_window).pack(side=tk.LEFT, padx=4)
+
         self.error_var = tk.StringVar(value="Errors: 0")
         ttk.Label(toolbar, textvariable=self.error_var,
                   foreground="red").pack(side=tk.RIGHT, padx=10)
 
         self.count_var = tk.StringVar(value="Messages: 0")
         ttk.Label(toolbar, textvariable=self.count_var).pack(side=tk.RIGHT, padx=10)
+
+        # ── Filter bar ────────────────────────────────────────────────────────
+        filter_bar = ttk.Frame(self.root)
+        filter_bar.pack(fill=tk.X, padx=10, pady=(0, 2))
+        ttk.Label(filter_bar, text="Filter:").pack(side=tk.LEFT, padx=(0, 4))
+        # Entry uses self._filter_var, created after _build_send_panel to avoid
+        # premature trace firing; packed here but variable assigned later.
+        self._filter_entry = ttk.Entry(filter_bar, width=50)
+        self._filter_entry.pack(side=tk.LEFT)
+        ttk.Label(filter_bar,
+                  text="  space/comma separated  •  matches ID, message name, or data",
+                  foreground="gray").pack(side=tk.LEFT, padx=6)
+        ttk.Button(filter_bar, text="✕", width=2,
+                   command=self._clear_filter).pack(side=tk.LEFT, padx=2)
 
         pane = tk.PanedWindow(self.root, orient=tk.HORIZONTAL,
                               sashrelief=tk.RAISED, sashwidth=5)
@@ -173,18 +236,24 @@ class CANViewer:
         sym_frame = ttk.LabelFrame(pane, text="Symbolic (DBC Decoded)")
         pane.add(sym_frame, minsize=320)
 
-        sym_cols = ("value", "unit", "timestamp", "rel")
+        sym_cols = ("value", "unit", "timestamp", "rel", "min_val", "max_val", "count")
         self.sym_tree = ttk.Treeview(sym_frame, columns=sym_cols, show="tree headings")
         self.sym_tree.heading("#0",        text="Message / Signal", anchor=tk.W)
         self.sym_tree.heading("value",     text="Value")
         self.sym_tree.heading("unit",      text="Unit")
         self.sym_tree.heading("timestamp", text="Timestamp")
         self.sym_tree.heading("rel",       text="Rel (s)")
+        self.sym_tree.heading("min_val",   text="Min")
+        self.sym_tree.heading("max_val",   text="Max")
+        self.sym_tree.heading("count",     text="Count")
         self.sym_tree.column("#0",        width=170, anchor=tk.W)
         self.sym_tree.column("value",     width=80,  anchor=tk.E)
         self.sym_tree.column("unit",      width=45,  anchor=tk.W)
         self.sym_tree.column("timestamp", width=100, anchor=tk.W)
         self.sym_tree.column("rel",       width=65,  anchor=tk.E)
+        self.sym_tree.column("min_val",   width=65,  anchor=tk.E)
+        self.sym_tree.column("max_val",   width=65,  anchor=tk.E)
+        self.sym_tree.column("count",     width=50,  anchor=tk.E)
 
         sym_vsb = ttk.Scrollbar(sym_frame, orient=tk.VERTICAL, command=self.sym_tree.yview)
         self.sym_tree.configure(yscrollcommand=sym_vsb.set)
@@ -192,8 +261,13 @@ class CANViewer:
         sym_vsb.grid(row=0, column=1, sticky="ns")
         sym_frame.rowconfigure(0, weight=1)
         sym_frame.columnconfigure(0, weight=1)
+        self.sym_tree.tag_configure("changed", background="#ffff99")
 
         self._build_send_panel()
+
+        # Connect the filter entry to the filter var AFTER all widgets exist
+        self._filter_entry.configure(textvariable=self._filter_var)
+        self._filter_var.trace_add("write", lambda *_: self._on_filter_change())
 
     # ─────────────────────────────────────────────────── Send panel ──────────
 
@@ -571,9 +645,18 @@ class CANViewer:
                     (k for k, v in entry["_choices"].items() if str(v) == label), 0)
             else:
                 try:
-                    sig_data[sig.name] = float(entry["val_var"].get())
+                    val = float(entry["val_var"].get())
                 except ValueError:
-                    sig_data[sig.name] = 0.0
+                    val = 0.0
+                # Clamp to DBC-defined range so out-of-range values never
+                # cause an encode error (periodic send continues uninterrupted)
+                sig_min = entry.get("_min")
+                sig_max = entry.get("_max")
+                if sig_min is not None and val < sig_min:
+                    val = sig_min
+                if sig_max is not None and val > sig_max:
+                    val = sig_max
+                sig_data[sig.name] = val
 
         try:
             # strict=False: encode available signals without requiring every
@@ -737,6 +820,10 @@ class CANViewer:
         self._signal_iids.clear()
         self._msg_iids.clear()
 
+        # Refresh plot listbox if the plot window is open
+        if self._plot_win and self._plot_win.winfo_exists():
+            self._populate_plot_listbox()
+
         # Refresh all DBC send rows with the new message list
         msg_names = sorted(m.name for m in self.db.messages)
         for rd in self._dbc_send_rows:
@@ -761,15 +848,20 @@ class CANViewer:
 
         arb_id = msg.arbitration_id
 
-        # Ensure message parent row exists
+        # Ensure message parent row exists; apply current filter to new rows
         if arb_id not in self._msg_iids:
             msg_iid = self.sym_tree.insert(
                 "", tk.END, text=db_msg.name, open=True,
-                values=("", "", ts, rel))
+                values=("", "", ts, rel, "", "", ""))
             self._msg_iids[arb_id] = msg_iid
+            # Hide immediately if a filter is active and this message doesn't match
+            tokens = self._get_filter_tokens()
+            if tokens and not self._passes_filter(
+                    f"0x{arb_id:x}", "", db_msg.name, tokens):
+                self.sym_tree.detach(msg_iid)
         else:
-            # Update last-seen timestamps on the message row
-            self.sym_tree.item(self._msg_iids[arb_id], values=("", "", ts, rel))
+            self.sym_tree.item(self._msg_iids[arb_id],
+                               values=("", "", ts, rel, "", "", ""))
 
         parent_iid = self._msg_iids[arb_id]
 
@@ -777,15 +869,49 @@ class CANViewer:
             sig_def = db_msg.get_signal_by_name(sig_name)
             unit    = sig_def.unit or ""
             val_str = f"{value:.4g}" if isinstance(value, float) else str(value)
-            key = (arb_id, sig_name)
+            key     = (arb_id, sig_name)
+
+            # ── Signal statistics ─────────────────────────────────────────────
+            stats = self._signal_stats.setdefault(
+                key, {"min": None, "max": None, "count": 0})
+            stats["count"] += 1
+            if isinstance(value, (int, float)):
+                fval = float(value)
+                if stats["min"] is None or fval < stats["min"]:
+                    stats["min"] = fval
+                if stats["max"] is None or fval > stats["max"]:
+                    stats["max"] = fval
+                # ── Plot buffer ───────────────────────────────────────────────
+                buf_key = f"{db_msg.name}.{sig_name}"
+                if buf_key not in self._plot_buffers:
+                    self._plot_buffers[buf_key] = collections.deque(maxlen=500)
+                self._plot_buffers[buf_key].append(fval)
+
+            min_str   = f"{stats['min']:.4g}"   if stats["min"] is not None else ""
+            max_str   = f"{stats['max']:.4g}"   if stats["max"] is not None else ""
+            count_str = str(stats["count"])
+            row_vals  = (val_str, unit, ts, rel, min_str, max_str, count_str)
+
+            # ── Update or insert treeview row ─────────────────────────────────
             if key in self._signal_iids:
-                self.sym_tree.item(self._signal_iids[key],
-                                   values=(val_str, unit, ts, rel))
+                iid = self._signal_iids[key]
+                self.sym_tree.item(iid, values=row_vals)
+                # ── Row highlight on change ───────────────────────────────────
+                if (self._highlight_var.get()
+                        and self._prev_sig_values.get(key) != val_str):
+                    existing = self._highlight_after_ids.get(iid)
+                    if existing:
+                        self.root.after_cancel(existing)
+                    self.sym_tree.item(iid, tags=("changed",))
+                    self._highlight_after_ids[iid] = self.root.after(
+                        2000, self._remove_highlight, iid)
             else:
                 iid = self.sym_tree.insert(
                     parent_iid, tk.END,
-                    text=sig_name, values=(val_str, unit, ts, rel))
+                    text=sig_name, values=row_vals)
                 self._signal_iids[key] = iid
+
+            self._prev_sig_values[key] = val_str
 
     # --------------------------------------------------------------- logging --
 
@@ -916,6 +1042,13 @@ class CANViewer:
         self.count_var.set("Messages: 0")
         self.error_var.set("Errors: 0")
         self._trace_start = None
+        self._signal_stats.clear()
+        self._prev_sig_values.clear()
+        self._plot_buffers.clear()
+        self._raw_buffer.clear()
+        for aid in self._highlight_after_ids.values():
+            self.root.after_cancel(aid)
+        self._highlight_after_ids.clear()
 
     def _on_close(self):
         self._disconnect()
@@ -958,8 +1091,13 @@ class CANViewer:
         rel = f"{now - self._trace_start:.3f}"
         ts  = datetime.now().strftime("%H:%M:%S.%f")[:-3]
 
+        tokens = self._get_filter_tokens()
+
         if msg.is_error_frame:
             data = " ".join(f"{b:02X}" for b in msg.data) if msg.data else ""
+            # Error frames always buffered and shown (never filtered out)
+            self._raw_buffer.append(
+                (ts, rel, "---", "ERR", "---", data, True))
             self.tree.insert("", tk.END,
                              values=(ts, rel, "---", "ERR", "---", data),
                              tags=("error",))
@@ -971,7 +1109,19 @@ class CANViewer:
                      else f"0x{msg.arbitration_id:03X}")
             frame = "EXT" if msg.is_extended_id else "STD"
             data  = " ".join(f"{b:02X}" for b in msg.data)
-            self.tree.insert("", tk.END, values=(ts, rel, arb, frame, msg.dlc, data))
+            # Resolve message name for filter (best-effort)
+            msg_name = ""
+            if self.db:
+                try:
+                    msg_name = self.db.get_message_by_frame_id(
+                        msg.arbitration_id).name
+                except Exception:
+                    pass
+            self._raw_buffer.append(
+                (ts, rel, arb, frame, msg.dlc, data, False))
+            if not tokens or self._passes_filter(arb, data, msg_name, tokens):
+                self.tree.insert("", tk.END,
+                                 values=(ts, rel, arb, frame, msg.dlc, data))
             self.message_count += 1
             self.count_var.set(f"Messages: {self.message_count}")
             self._decode_and_display(msg, ts, rel)
@@ -995,6 +1145,389 @@ class CANViewer:
 
         if self.autoscroll_var.get():
             self.tree.yview_moveto(1.0)
+
+    # ─── highlight helpers ────────────────────────────────────────────────────
+
+    def _remove_highlight(self, iid):
+        try:
+            self.sym_tree.item(iid, tags=())
+        except Exception:
+            pass
+        self._highlight_after_ids.pop(iid, None)
+
+    # ─── filter ───────────────────────────────────────────────────────────────
+
+    def _clear_filter(self):
+        self._filter_var.set("")
+
+    def _get_filter_tokens(self):
+        raw = self._filter_var.get().strip()
+        if not raw:
+            return []
+        return [t.lower() for t in re.split(r"[,\s]+", raw) if t]
+
+    def _passes_filter(self, arb: str, data: str, msg_name: str, tokens: list) -> bool:
+        haystack = f"{arb} {data} {msg_name}".lower()
+        return any(t in haystack for t in tokens)
+
+    def _on_filter_change(self):
+        """Re-populate raw tree from buffer and apply sym-tree visibility."""
+        tokens = self._get_filter_tokens()
+
+        # ── Raw tree rebuild from buffer ──────────────────────────────────────
+        self.tree.delete(*self.tree.get_children())
+        for item in self._raw_buffer:
+            ts, rel, arb, frame, dlc, data, is_error = item
+            if is_error or not tokens or self._passes_filter(arb, data, "", tokens):
+                if is_error:
+                    self.tree.insert("", tk.END,
+                                     values=(ts, rel, arb, frame, dlc, data),
+                                     tags=("error",))
+                else:
+                    self.tree.insert("", tk.END,
+                                     values=(ts, rel, arb, frame, dlc, data))
+        self.tree.tag_configure("error", foreground="red")
+        if self.autoscroll_var.get():
+            self.tree.yview_moveto(1.0)
+
+        # ── Sym tree: detach/reattach message parent rows ─────────────────────
+        for arb_id, msg_iid in self._msg_iids.items():
+            msg_name = self.sym_tree.item(msg_iid)["text"]
+            arb_hex  = f"0x{arb_id:x}"
+            match = (not tokens
+                     or self._passes_filter(arb_hex, "", msg_name, tokens))
+            currently_shown = msg_iid in self.sym_tree.get_children("")
+            if match and not currently_shown:
+                self.sym_tree.reattach(msg_iid, "", tk.END)
+            elif not match and currently_shown:
+                self.sym_tree.detach(msg_iid)
+
+    # ─── dark mode ────────────────────────────────────────────────────────────
+
+    def _toggle_dark_mode(self):
+        self._dark_mode = not self._dark_mode
+        self.btn_dark.config(
+            text="Light Mode" if self._dark_mode else "Dark Mode")
+        self._apply_theme()
+
+    def _apply_theme(self):
+        style = ttk.Style()
+        if self._dark_mode:
+            try:
+                style.theme_use("clam")
+            except Exception:
+                pass
+            BG, FG      = "#1e1e1e", "#d4d4d4"
+            FIELD       = "#2d2d30"
+            SEL_BG      = "#264f78"
+            TREE_BG     = "#252526"
+            HEAD_BG     = "#2d2d30"
+            BORDER      = "#3e3e42"
+            style.configure(".",
+                background=BG, foreground=FG,
+                fieldbackground=FIELD,
+                selectbackground=SEL_BG, selectforeground=FG,
+                bordercolor=BORDER, troughcolor=FIELD)
+            for w in ("TFrame", "TLabelframe"):
+                style.configure(w, background=BG)
+            style.configure("TLabelframe.Label", background=BG, foreground=FG)
+            style.configure("TLabel",       background=BG, foreground=FG)
+            style.configure("TCheckbutton", background=BG, foreground=FG)
+            style.configure("TRadiobutton", background=BG, foreground=FG)
+            style.configure("TButton",      background=BG, foreground=FG)
+            style.map("TButton",
+                      background=[("active", SEL_BG)],
+                      foreground=[("active", "#ffffff")])
+            style.configure("TEntry",
+                fieldbackground=FIELD, foreground=FG, insertcolor=FG)
+            style.configure("TCombobox",
+                fieldbackground=FIELD, foreground=FG,
+                selectbackground=SEL_BG, arrowcolor=FG)
+            style.map("TCombobox",
+                      fieldbackground=[("readonly", FIELD)],
+                      foreground=[("readonly", FG)])
+            style.configure("Treeview",
+                background=TREE_BG, foreground=FG,
+                fieldbackground=TREE_BG, rowheight=22)
+            style.configure("Treeview.Heading",
+                background=HEAD_BG, foreground=FG)
+            style.map("Treeview",
+                      background=[("selected", SEL_BG)],
+                      foreground=[("selected", "#ffffff")])
+            style.configure("TScrollbar",
+                background=BG, troughcolor=FIELD, arrowcolor=FG)
+            style.configure("TSeparator", background=BORDER)
+            self.root.configure(background=BG)
+            self._send_canvas.configure(background=FIELD)
+            self._dbc_canvas.configure(background=FIELD)
+            self.sym_tree.tag_configure("changed", background="#806600")
+            self.tree.tag_configure("error", foreground="#ff6b6b")
+        else:
+            try:
+                style.theme_use(self._original_theme)
+            except Exception:
+                pass
+            self.root.configure(background="SystemButtonFace")
+            self._send_canvas.configure(background="SystemButtonFace")
+            self._dbc_canvas.configure(background="SystemButtonFace")
+            self.sym_tree.tag_configure("changed", background="#ffff99")
+            self.tree.tag_configure("error", foreground="red")
+
+    # ─── signal plot ──────────────────────────────────────────────────────────
+
+    def _open_plot_window(self):
+        if not _MATPLOTLIB_AVAILABLE:
+            messagebox.showinfo(
+                "Signal Plot",
+                "matplotlib is not installed.\n\nRun:  pip install matplotlib")
+            return
+        if self._plot_win and self._plot_win.winfo_exists():
+            self._plot_win.lift()
+            return
+
+        win = tk.Toplevel(self.root)
+        win.title("Signal Plot")
+        win.geometry("960x520")
+        win.protocol("WM_DELETE_WINDOW",
+                     lambda: (win.destroy(), setattr(self, "_plot_win", None)))
+        self._plot_win = win
+
+        # ── Left: signal selector ─────────────────────────────────────────────
+        left = ttk.Frame(win, padding=4)
+        left.pack(side=tk.LEFT, fill=tk.Y)
+        ttk.Label(left, text="DBC Signals (numeric only):").pack(anchor=tk.W)
+        lb_frame = ttk.Frame(left)
+        lb_frame.pack(fill=tk.BOTH, expand=True)
+        self._plot_listbox = tk.Listbox(lb_frame, selectmode=tk.MULTIPLE,
+                                        width=26, height=22, exportselection=False)
+        lb_vsb = ttk.Scrollbar(lb_frame, orient=tk.VERTICAL,
+                                command=self._plot_listbox.yview)
+        self._plot_listbox.configure(yscrollcommand=lb_vsb.set)
+        self._plot_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        lb_vsb.pack(side=tk.RIGHT, fill=tk.Y)
+        self._populate_plot_listbox()
+        ttk.Button(left, text="Plot Selected",
+                   command=self._on_plot_selected).pack(fill=tk.X, pady=(4, 2))
+        ttk.Button(left, text="Clear Plot",
+                   command=self._clear_plot).pack(fill=tk.X)
+
+        # ── Right: matplotlib chart ───────────────────────────────────────────
+        right = ttk.Frame(win, padding=4)
+        right.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        fig = Figure(figsize=(7, 4.5), tight_layout=True)
+        self._plot_ax = fig.add_subplot(111)
+        self._plot_ax.set_xlabel("Sample index")
+        self._plot_ax.set_ylabel("Value")
+        self._plot_ax.grid(True)
+        self._plot_canvas_widget = FigureCanvasTkAgg(fig, right)
+        self._plot_canvas_widget.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+        self._plot_canvas_widget.draw()
+        self._plot_fig = fig
+
+        self._schedule_plot_refresh()
+
+    def _populate_plot_listbox(self):
+        self._plot_listbox.delete(0, tk.END)
+        if self.db:
+            for msg in sorted(self.db.messages, key=lambda m: m.name):
+                for sig in sorted(msg.signals, key=lambda s: s.name):
+                    if not sig.choices:
+                        self._plot_listbox.insert(
+                            tk.END, f"{msg.name}.{sig.name}")
+
+    def _on_plot_selected(self):
+        self._plot_active_signals = [
+            self._plot_listbox.get(i)
+            for i in self._plot_listbox.curselection()]
+
+    def _clear_plot(self):
+        self._plot_active_signals = []
+        if hasattr(self, "_plot_ax") and self._plot_ax:
+            self._plot_ax.cla()
+            self._plot_ax.set_xlabel("Sample index")
+            self._plot_ax.set_ylabel("Value")
+            self._plot_ax.grid(True)
+            self._plot_canvas_widget.draw_idle()
+
+    def _schedule_plot_refresh(self):
+        if self._plot_win and self._plot_win.winfo_exists():
+            self._do_plot_refresh()
+            self._plot_win.after(250, self._schedule_plot_refresh)
+
+    def _do_plot_refresh(self):
+        if not self._plot_active_signals:
+            return
+        ax = self._plot_ax
+        ax.cla()
+        ax.set_xlabel("Sample index")
+        ax.set_ylabel("Value")
+        ax.grid(True)
+        for key in self._plot_active_signals:
+            buf = self._plot_buffers.get(key)
+            if buf and len(buf) > 1:
+                ax.plot(list(buf), label=key.split(".")[-1], linewidth=1.5)
+        ax.legend(loc="upper left", fontsize=8)
+        self._plot_canvas_widget.draw_idle()
+
+    # ─── trace import / replay ────────────────────────────────────────────────
+
+    def _open_replay_window(self):
+        if hasattr(self, "_replay_win") and self._replay_win \
+                and self._replay_win.winfo_exists():
+            self._replay_win.lift()
+            return
+
+        win = tk.Toplevel(self.root)
+        win.title("Trace Import / Replay")
+        win.geometry("800x520")
+        win.protocol("WM_DELETE_WINDOW",
+                     lambda: (win.destroy(),
+                              setattr(self, "_replay_win", None)))
+        self._replay_win = win
+
+        # ── Controls row ──────────────────────────────────────────────────────
+        ctrl = ttk.Frame(win, padding=4)
+        ctrl.pack(fill=tk.X)
+        ttk.Button(ctrl, text="Open File…",
+                   command=self._replay_open_file).pack(side=tk.LEFT, padx=4)
+        ttk.Label(ctrl, text="Speed:").pack(side=tk.LEFT, padx=(12, 2))
+        ttk.Entry(ctrl, textvariable=self._replay_speed_var,
+                  width=6).pack(side=tk.LEFT)
+        ttk.Label(ctrl, text="x").pack(side=tk.LEFT, padx=(0, 12))
+        self._btn_replay = ttk.Button(ctrl, text="Replay",
+                                      command=self._replay_start,
+                                      state=tk.DISABLED)
+        self._btn_replay.pack(side=tk.LEFT, padx=4)
+        self._replay_info_var = tk.StringVar(value="No file loaded")
+        ttk.Label(ctrl, textvariable=self._replay_info_var,
+                  foreground="gray").pack(side=tk.LEFT, padx=8)
+
+        # ── Preview tree ──────────────────────────────────────────────────────
+        preview = ttk.Frame(win)
+        preview.pack(fill=tk.BOTH, expand=True, padx=4, pady=(0, 4))
+        cols = ("ts", "id", "frame", "dlc", "data")
+        self._replay_tree = ttk.Treeview(preview, columns=cols, show="headings")
+        self._replay_tree.heading("ts",    text="Timestamp (s)")
+        self._replay_tree.heading("id",    text="Arb ID")
+        self._replay_tree.heading("frame", text="Frame")
+        self._replay_tree.heading("dlc",   text="DLC")
+        self._replay_tree.heading("data",  text="Data (hex)")
+        self._replay_tree.column("ts",    width=110, anchor=tk.E)
+        self._replay_tree.column("id",    width=100, anchor=tk.CENTER)
+        self._replay_tree.column("frame", width=50,  anchor=tk.CENTER)
+        self._replay_tree.column("dlc",   width=40,  anchor=tk.CENTER)
+        self._replay_tree.column("data",  width=400, anchor=tk.W)
+        vsb = ttk.Scrollbar(preview, orient=tk.VERTICAL,
+                             command=self._replay_tree.yview)
+        self._replay_tree.configure(yscrollcommand=vsb.set)
+        self._replay_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        vsb.pack(side=tk.RIGHT, fill=tk.Y)
+
+    def _replay_open_file(self):
+        filename = filedialog.askopenfilename(
+            title="Open CAN Trace",
+            filetypes=[
+                ("All supported", "*.asc *.blf *.csv *.log"),
+                ("ASC files",  "*.asc"),
+                ("BLF files",  "*.blf"),
+                ("CSV files",  "*.csv"),
+                ("All files",  "*.*"),
+            ],
+        )
+        if not filename:
+            return
+        messages = []
+        try:
+            if filename.lower().endswith(".csv"):
+                # Read the app's own CSV format:
+                # Timestamp, Arb ID, Frame, DLC, Data
+                t0 = None
+                with open(filename, newline="") as f:
+                    for row in csv.reader(f):
+                        if not row or row[0].startswith("Timestamp"):
+                            continue
+                        try:
+                            ts_str, arb_str, frame, dlc_str, data_str = \
+                                row[0], row[1], row[2], row[3], row[4]
+                            if arb_str in ("---", ""):
+                                continue
+                            arb_id  = int(arb_str, 16)
+                            is_ext  = frame.upper() == "EXT"
+                            data    = bytes(
+                                int(x, 16) for x in data_str.split() if x)
+                            # Reconstruct a monotonic timestamp from row index
+                            ts_f = float(len(messages)) * 0.01
+                            if t0 is None:
+                                t0 = ts_f
+                            msg = can.Message(
+                                timestamp=ts_f,
+                                arbitration_id=arb_id,
+                                is_extended_id=is_ext,
+                                data=data,
+                            )
+                            messages.append(msg)
+                        except Exception:
+                            continue
+            else:
+                with can.LogReader(filename) as reader:
+                    for msg in reader:
+                        if not msg.is_error_frame:
+                            messages.append(msg)
+        except Exception as exc:
+            messagebox.showerror("Import Error", str(exc),
+                                 parent=self._replay_win)
+            return
+
+        self._replay_messages = messages
+        self._replay_info_var.set(f"{len(messages)} messages loaded")
+
+        # Populate preview
+        self._replay_tree.delete(*self._replay_tree.get_children())
+        t0 = messages[0].timestamp if messages else 0.0
+        for m in messages[:2000]:   # cap preview at 2000 rows
+            arb = (f"0x{m.arbitration_id:08X}" if m.is_extended_id
+                   else f"0x{m.arbitration_id:03X}")
+            data = " ".join(f"{b:02X}" for b in m.data)
+            frame = "EXT" if m.is_extended_id else "STD"
+            self._replay_tree.insert(
+                "", tk.END,
+                values=(f"{m.timestamp - t0:.4f}", arb, frame, m.dlc, data))
+
+        self._btn_replay.config(
+            state=tk.NORMAL if self.bus else tk.DISABLED)
+
+    def _replay_start(self):
+        if not self._replay_messages or self.bus is None:
+            return
+        try:
+            speed = max(0.01, float(self._replay_speed_var.get()))
+        except ValueError:
+            speed = 1.0
+        self._btn_replay.config(state=tk.DISABLED, text="Replaying…")
+
+        def _run():
+            msgs = self._replay_messages
+            if not msgs:
+                return
+            t0    = msgs[0].timestamp
+            start = time.time()
+            for m in msgs:
+                if self.bus is None:
+                    break
+                delay      = (m.timestamp - t0) / speed
+                elapsed    = time.time() - start
+                sleep_time = delay - elapsed
+                if sleep_time > 0:
+                    time.sleep(sleep_time)
+                try:
+                    self.bus.send(m)
+                except Exception:
+                    break
+            self.root.after(
+                0, lambda: self._btn_replay.config(
+                    state=tk.NORMAL, text="Replay"))
+
+        threading.Thread(target=_run, daemon=True).start()
 
 
 # --------------------------------------------------------------------------- #
