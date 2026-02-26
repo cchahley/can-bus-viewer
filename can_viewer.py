@@ -243,6 +243,8 @@ class CANViewer:
             (0, 0), window=self._send_rows_frame, anchor=tk.NW)
         self._send_rows_frame.bind("<Configure>", self._on_send_frame_configure)
         self._send_canvas.bind("<Configure>", self._on_send_canvas_configure)
+        self._send_canvas.bind("<MouseWheel>",
+            lambda e: self._send_canvas.yview_scroll(int(-e.delta / 120), "units"))
 
         ttk.Button(self._raw_send_frame, text="+ Add Row",
                    command=self._add_send_row).pack(anchor=tk.W, padx=2, pady=2)
@@ -264,6 +266,8 @@ class CANViewer:
             (0, 0), window=self._dbc_rows_frame, anchor=tk.NW)
         self._dbc_rows_frame.bind("<Configure>", self._on_dbc_frame_configure)
         self._dbc_canvas.bind("<Configure>", self._on_dbc_canvas_configure)
+        self._dbc_canvas.bind("<MouseWheel>",
+            lambda e: self._dbc_canvas.yview_scroll(int(-e.delta / 120), "units"))
 
         ttk.Button(self._dbc_send_frame, text="+ Add Row",
                    command=self._add_dbc_send_row).pack(anchor=tk.W, padx=2, pady=2)
@@ -397,6 +401,8 @@ class CANViewer:
             "periodic_var": periodic_var,
             "period_var":   period_var,
             "btn_send":     None,
+            "btn_toggle":   None,
+            "_collapsed":   False,
             "frame":        card,
             "_after_id":    None,
         }
@@ -404,6 +410,12 @@ class CANViewer:
         # ── Header row ────────────────────────────────────────────────────────
         hdr = ttk.Frame(card)
         hdr.pack(fill=tk.X, padx=2, pady=(2, 0))
+
+        # Collapse/expand toggle (▼ = expanded, ▶ = collapsed)
+        btn_toggle = ttk.Button(hdr, text="▼", width=2,
+                                command=lambda rd=row_data: self._toggle_dbc_card(rd))
+        btn_toggle.pack(side=tk.LEFT, padx=(0, 2))
+        row_data["btn_toggle"] = btn_toggle
 
         msg_cb = ttk.Combobox(hdr, textvariable=msg_var, width=22, state="readonly")
         if self.db:
@@ -456,6 +468,18 @@ class CANViewer:
         self._dbc_rows_frame.update_idletasks()
         self._dbc_canvas.configure(scrollregion=self._dbc_canvas.bbox("all"))
 
+    def _toggle_dbc_card(self, row_data):
+        """Show or hide the signal sub-frame for a DBC send card."""
+        row_data["_collapsed"] = not row_data["_collapsed"]
+        if row_data["_collapsed"]:
+            row_data["sig_frame"].pack_forget()
+            row_data["btn_toggle"].config(text="▶")
+        else:
+            row_data["sig_frame"].pack(fill=tk.X, padx=(20, 2), pady=(2, 4))
+            row_data["btn_toggle"].config(text="▼")
+        self._dbc_rows_frame.update_idletasks()
+        self._dbc_canvas.configure(scrollregion=self._dbc_canvas.bbox("all"))
+
     def _on_dbc_msg_change(self, row_data):
         """Rebuild the signal sub-frame to show one row per signal in the chosen message."""
         if self.db is None:
@@ -491,14 +515,32 @@ class CANViewer:
                     "_choices":  sig.choices,
                 }
             else:
-                val_var.set("0")
-                ttk.Entry(sig_row, textvariable=val_var, width=12).pack(side=tk.LEFT, padx=1)
+                sig_min = sig.minimum
+                sig_max = sig.maximum
+                # Default entry value to minimum (or 0)
+                default = sig_min if sig_min is not None else 0.0
+                val_var.set(str(default))
+                entry = ttk.Entry(sig_row, textvariable=val_var, width=12)
+                entry.pack(side=tk.LEFT, padx=1)
                 unit_text = sig.unit if sig.unit else ""
-                ttk.Label(sig_row, text=unit_text, width=6, anchor=tk.W).pack(side=tk.LEFT)
+                # Show range hint when min/max are defined
+                if sig_min is not None or sig_max is not None:
+                    lo = f"{sig_min}" if sig_min is not None else "-∞"
+                    hi = f"{sig_max}" if sig_max is not None else "∞"
+                    ttk.Label(sig_row, text=f"{unit_text}  [{lo}, {hi}]",
+                              anchor=tk.W, foreground="gray").pack(side=tk.LEFT, padx=(2, 0))
+                else:
+                    ttk.Label(sig_row, text=unit_text, width=6, anchor=tk.W).pack(side=tk.LEFT)
                 row_data["sig_rows"][sig.name] = {
                     "val_var":  val_var,
                     "_is_enum": False,
+                    "_min":     sig_min,
+                    "_max":     sig_max,
                 }
+                # Clamp on FocusOut and Return
+                clamp_fn = lambda _, rd=row_data, sn=sig.name: self._clamp_signal_entry(rd, sn)
+                entry.bind("<FocusOut>", clamp_fn)
+                entry.bind("<Return>",   clamp_fn)
 
         self._dbc_rows_frame.update_idletasks()
         self._dbc_canvas.configure(scrollregion=self._dbc_canvas.bbox("all"))
@@ -550,6 +592,24 @@ class CANViewer:
                 self._stop_periodic(row_data)
                 row_data["periodic_var"].set(False)
             messagebox.showerror("Send Error", str(exc))
+
+    def _clamp_signal_entry(self, row_data, sig_name):
+        """Clamp a numeric signal entry to the DBC-defined min/max on FocusOut/Return."""
+        entry = row_data["sig_rows"].get(sig_name)
+        if entry is None or entry["_is_enum"]:
+            return
+        try:
+            val = float(entry["val_var"].get())
+        except ValueError:
+            val = 0.0
+        sig_min = entry["_min"]
+        sig_max = entry["_max"]
+        if sig_min is not None and val < sig_min:
+            val = sig_min
+        if sig_max is not None and val > sig_max:
+            val = sig_max
+        # Format as int if the value is a whole number, else float
+        entry["val_var"].set(int(val) if val == int(val) else val)
 
     # ─── periodic send (shared by raw and DBC rows) ───────────────────────────
 
