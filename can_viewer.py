@@ -1,16 +1,23 @@
 """
 CAN Bus Viewer - Supports PEAK (PCAN) and Vector interfaces
-Requires: pip install python-can
+Requires: pip install python-can cantools
 """
 import contextlib
-import os
 import csv
+import os
 import tkinter as tk
-from tkinter import ttk, messagebox, filedialog
-import can
+from tkinter import filedialog, messagebox, ttk
 import threading
 import queue
 from datetime import datetime
+
+import can
+
+try:
+    import cantools
+    _CANTOOLS_AVAILABLE = True
+except ImportError:
+    _CANTOOLS_AVAILABLE = False
 
 
 @contextlib.contextmanager
@@ -31,17 +38,21 @@ class CANViewer:
     def __init__(self, root):
         self.root = root
         self.root.title("CAN Bus Viewer")
-        self.root.geometry("950x620")
-        self.root.minsize(700, 400)
+        self.root.geometry("1400x700")
+        self.root.minsize(900, 450)
 
         self.bus = None
         self.running = False
         self.message_queue = queue.Queue()
         self.message_count = 0
         self.error_count = 0
+
         self.log_writer = None
         self.log_file = None
         self.log_format = None
+
+        self.db = None                # cantools database
+        self._signal_iids: dict = {}  # (msg_id, signal_name) → treeview iid
 
         self._build_ui()
         self._scan_channels()
@@ -52,7 +63,7 @@ class CANViewer:
     def _build_ui(self):
         # --- Connection bar ---
         conn = ttk.LabelFrame(self.root, text="Connection", padding=8)
-        conn.pack(fill=tk.X, padx=10, pady=(8, 4))
+        conn.pack(fill=tk.X, padx=10, pady=(8, 2))
 
         ttk.Label(conn, text="Interface:").grid(row=0, column=0, sticky=tk.W, padx=4)
         self.iface_var = tk.StringVar(value="pcan")
@@ -61,19 +72,22 @@ class CANViewer:
         iface_cb.grid(row=0, column=1, padx=4)
         iface_cb.bind("<<ComboboxSelected>>", self._on_iface_change)
 
-        ttk.Label(conn, text="Channel:").grid(row=0, column=2, sticky=tk.W, padx=4)
-        self.channel_var = tk.StringVar(value="PCAN_USBBUS1")
-        self.channel_cb = ttk.Combobox(conn, textvariable=self.channel_var, width=16)
+        ttk.Label(conn, text="Device:").grid(row=0, column=2, sticky=tk.W, padx=4)
+        self.channel_var = tk.StringVar()
+        self.channel_cb = ttk.Combobox(conn, textvariable=self.channel_var, width=18)
         self.channel_cb.grid(row=0, column=3, padx=4)
 
-        ttk.Button(conn, text="Scan", command=self._scan_channels).grid(row=0, column=4, padx=(0, 8))
+        ttk.Button(conn, text="Rescan", command=self._scan_channels).grid(
+            row=0, column=4, padx=(0, 10))
 
         ttk.Label(conn, text="Bitrate:").grid(row=0, column=5, sticky=tk.W, padx=4)
         self.bitrate_var = tk.StringVar(value="500000")
         ttk.Combobox(conn, textvariable=self.bitrate_var, width=10,
-                     values=["125000", "250000", "500000", "1000000"]).grid(row=0, column=6, padx=4)
+                     values=["125000", "250000", "500000", "1000000"]).grid(
+            row=0, column=6, padx=4)
 
-        self.btn_connect = ttk.Button(conn, text="Connect", command=self._connect)
+        self.btn_connect = ttk.Button(conn, text="Connect",
+                                       command=self._connect, state=tk.DISABLED)
         self.btn_connect.grid(row=0, column=7, padx=(12, 4))
 
         self.btn_disconnect = ttk.Button(conn, text="Disconnect",
@@ -98,47 +112,84 @@ class CANViewer:
         self.btn_log = ttk.Button(toolbar, text="Start Log", command=self._toggle_logging)
         self.btn_log.pack(side=tk.LEFT, padx=(12, 4))
 
+        ttk.Separator(toolbar, orient=tk.VERTICAL).pack(
+            side=tk.LEFT, fill=tk.Y, padx=10, pady=2)
+
+        ttk.Button(toolbar, text="Load DBC", command=self._load_dbc).pack(
+            side=tk.LEFT, padx=4)
+        self.dbc_var = tk.StringVar(value="No DBC loaded")
+        ttk.Label(toolbar, textvariable=self.dbc_var,
+                  foreground="gray").pack(side=tk.LEFT, padx=4)
+
         self.error_var = tk.StringVar(value="Errors: 0")
-        ttk.Label(toolbar, textvariable=self.error_var, foreground="red").pack(side=tk.RIGHT, padx=10)
+        ttk.Label(toolbar, textvariable=self.error_var,
+                  foreground="red").pack(side=tk.RIGHT, padx=10)
 
         self.count_var = tk.StringVar(value="Messages: 0")
         ttk.Label(toolbar, textvariable=self.count_var).pack(side=tk.RIGHT, padx=10)
 
-        # --- Message table ---
-        table_frame = ttk.Frame(self.root)
-        table_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=4)
+        # --- Side-by-side pane ---
+        pane = tk.PanedWindow(self.root, orient=tk.HORIZONTAL,
+                              sashrelief=tk.RAISED, sashwidth=5)
+        pane.pack(fill=tk.BOTH, expand=True, padx=10, pady=4)
 
-        cols = ("time", "id", "ext", "dlc", "data")
-        self.tree = ttk.Treeview(table_frame, columns=cols, show="headings")
+        # Left: Raw CAN
+        raw_frame = ttk.LabelFrame(pane, text="Raw CAN")
+        pane.add(raw_frame, minsize=420)
 
+        raw_cols = ("time", "id", "ext", "dlc", "data")
+        self.tree = ttk.Treeview(raw_frame, columns=raw_cols, show="headings")
         self.tree.heading("time",  text="Timestamp")
         self.tree.heading("id",   text="Arb ID (hex)")
         self.tree.heading("ext",  text="Frame")
         self.tree.heading("dlc",  text="DLC")
         self.tree.heading("data", text="Data (hex)")
+        self.tree.column("time",  width=115, anchor=tk.W)
+        self.tree.column("id",   width=100, anchor=tk.CENTER)
+        self.tree.column("ext",  width=55,  anchor=tk.CENTER)
+        self.tree.column("dlc",  width=40,  anchor=tk.CENTER)
+        self.tree.column("data", width=280, anchor=tk.W)
 
-        self.tree.column("time",  width=130, anchor=tk.W)
-        self.tree.column("id",   width=110, anchor=tk.CENTER)
-        self.tree.column("ext",  width=70,  anchor=tk.CENTER)
-        self.tree.column("dlc",  width=45,  anchor=tk.CENTER)
-        self.tree.column("data", width=500, anchor=tk.W)
-
-        vsb = ttk.Scrollbar(table_frame, orient=tk.VERTICAL, command=self.tree.yview)
-        hsb = ttk.Scrollbar(table_frame, orient=tk.HORIZONTAL, command=self.tree.xview)
-        self.tree.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
-
+        raw_vsb = ttk.Scrollbar(raw_frame, orient=tk.VERTICAL,   command=self.tree.yview)
+        raw_hsb = ttk.Scrollbar(raw_frame, orient=tk.HORIZONTAL, command=self.tree.xview)
+        self.tree.configure(yscrollcommand=raw_vsb.set, xscrollcommand=raw_hsb.set)
         self.tree.grid(row=0, column=0, sticky="nsew")
-        vsb.grid(row=0, column=1, sticky="ns")
-        hsb.grid(row=1, column=0, sticky="ew")
-        table_frame.rowconfigure(0, weight=1)
-        table_frame.columnconfigure(0, weight=1)
+        raw_vsb.grid(row=0, column=1, sticky="ns")
+        raw_hsb.grid(row=1, column=0, sticky="ew")
+        raw_frame.rowconfigure(0, weight=1)
+        raw_frame.columnconfigure(0, weight=1)
+
+        # Right: Symbolic (DBC decoded) — live signal values, one row per signal
+        sym_frame = ttk.LabelFrame(pane, text="Symbolic (DBC Decoded)")
+        pane.add(sym_frame, minsize=320)
+
+        sym_cols = ("msg", "signal", "value", "unit", "updated")
+        self.sym_tree = ttk.Treeview(sym_frame, columns=sym_cols, show="headings")
+        self.sym_tree.heading("msg",     text="Message")
+        self.sym_tree.heading("signal",  text="Signal")
+        self.sym_tree.heading("value",   text="Value")
+        self.sym_tree.heading("unit",    text="Unit")
+        self.sym_tree.heading("updated", text="Updated")
+        self.sym_tree.column("msg",     width=120, anchor=tk.W)
+        self.sym_tree.column("signal",  width=150, anchor=tk.W)
+        self.sym_tree.column("value",   width=90,  anchor=tk.E)
+        self.sym_tree.column("unit",    width=55,  anchor=tk.W)
+        self.sym_tree.column("updated", width=110, anchor=tk.W)
+
+        sym_vsb = ttk.Scrollbar(sym_frame, orient=tk.VERTICAL, command=self.sym_tree.yview)
+        self.sym_tree.configure(yscrollcommand=sym_vsb.set)
+        self.sym_tree.grid(row=0, column=0, sticky="nsew")
+        sym_vsb.grid(row=0, column=1, sticky="ns")
+        sym_frame.rowconfigure(0, weight=1)
+        sym_frame.columnconfigure(0, weight=1)
 
         # --- Status bar ---
-        self.bar_var = tk.StringVar(value="Ready  —  install python-can:  pip install python-can")
+        self.bar_var = tk.StringVar(value="Ready")
         ttk.Label(self.root, textvariable=self.bar_var,
-                  relief=tk.SUNKEN, anchor=tk.W).pack(fill=tk.X, side=tk.BOTTOM, padx=10, pady=(0, 4))
+                  relief=tk.SUNKEN, anchor=tk.W).pack(
+            fill=tk.X, side=tk.BOTTOM, padx=10, pady=(0, 4))
 
-    # --------------------------------------------------------- event handlers
+    # --------------------------------------------------------- device scan --
 
     def _scan_channels(self):
         iface = self.iface_var.get()
@@ -152,15 +203,71 @@ class CANViewer:
         if channels:
             self.channel_cb["values"] = channels
             self.channel_var.set(channels[0])
-            self.bar_var.set(f"Found {len(channels)} device(s) on {iface.upper()}")
+            self.btn_connect.config(state=tk.NORMAL)
+            self.bar_var.set(
+                f"Found {len(channels)} {iface.upper()} device(s) — ready to connect")
         else:
             self.channel_cb["values"] = []
-            default = "PCAN_USBBUS1" if iface == "pcan" else "0"
-            self.channel_var.set(default)
-            self.bar_var.set(f"No {iface.upper()} devices detected — enter channel manually")
+            self.channel_var.set("")
+            self.btn_connect.config(state=tk.DISABLED)
+            self.bar_var.set(
+                f"No {iface.upper()} devices found — plug in dongle and click Rescan")
 
     def _on_iface_change(self, _=None):
         self._scan_channels()
+
+    # ----------------------------------------------------------------- DBC --
+
+    def _load_dbc(self):
+        if not _CANTOOLS_AVAILABLE:
+            messagebox.showerror(
+                "Missing Library",
+                "cantools is not installed.\n\nRun:  pip install cantools",
+            )
+            return
+        filename = filedialog.askopenfilename(
+            title="Load DBC File",
+            filetypes=[("DBC files", "*.dbc"), ("All files", "*.*")],
+        )
+        if not filename:
+            return
+        try:
+            self.db = cantools.database.load_file(filename)
+        except Exception as exc:
+            messagebox.showerror("DBC Error", str(exc))
+            return
+        self.dbc_var.set(
+            f"DBC: {os.path.basename(filename)}  ({len(self.db.messages)} msgs)")
+        # Clear symbolic view — signals from the old DBC are stale
+        self.sym_tree.delete(*self.sym_tree.get_children())
+        self._signal_iids.clear()
+
+    def _decode_and_display(self, msg: can.Message, ts: str):
+        """Decode msg signals via DBC and update the symbolic live view."""
+        if self.db is None or msg.is_error_frame:
+            return
+        try:
+            db_msg = self.db.get_message_by_frame_id(msg.arbitration_id)
+        except KeyError:
+            return
+        try:
+            signals = db_msg.decode(msg.data, decode_choices=True)
+        except Exception:
+            return
+        for sig_name, value in signals.items():
+            sig_def = db_msg.get_signal_by_name(sig_name)
+            unit = sig_def.unit or ""
+            val_str = f"{value:.4g}" if isinstance(value, float) else str(value)
+            key = (msg.arbitration_id, sig_name)
+            if key in self._signal_iids:
+                self.sym_tree.item(self._signal_iids[key],
+                                   values=(db_msg.name, sig_name, val_str, unit, ts))
+            else:
+                iid = self.sym_tree.insert(
+                    "", tk.END, values=(db_msg.name, sig_name, val_str, unit, ts))
+                self._signal_iids[key] = iid
+
+    # --------------------------------------------------------------- logging --
 
     def _toggle_logging(self):
         if self.log_writer is None:
@@ -205,12 +312,13 @@ class CANViewer:
         self.btn_log.config(text="Start Log")
         self.bar_var.set("Log saved")
 
+    # -------------------------------------------------------------- connect --
+
     def _connect(self):
         iface   = self.iface_var.get()
         channel = self.channel_var.get()
         bitrate = int(self.bitrate_var.get())
 
-        # Vector channel must be an integer
         if iface == "vector":
             try:
                 channel = int(channel)
@@ -237,7 +345,8 @@ class CANViewer:
         self.btn_disconnect.config(state=tk.NORMAL)
         self.status_var.set("Connected")
         self.status_lbl.config(foreground="green")
-        self.bar_var.set(f"Connected  |  {iface.upper()}  channel={channel}  bitrate={bitrate} bps")
+        self.bar_var.set(
+            f"Connected  |  {iface.upper()}  channel={channel}  bitrate={bitrate} bps")
 
     def _disconnect(self):
         self.running = False
@@ -259,6 +368,8 @@ class CANViewer:
 
     def _clear(self):
         self.tree.delete(*self.tree.get_children())
+        self.sym_tree.delete(*self.sym_tree.get_children())
+        self._signal_iids.clear()
         self.message_count = 0
         self.error_count = 0
         self.count_var.set("Messages: 0")
@@ -271,7 +382,7 @@ class CANViewer:
     # ------------------------------------------------------- background reader
 
     def _reader(self):
-        """Runs in a daemon thread; pushes messages onto the queue."""
+        """Runs in a daemon thread; pushes received messages onto the queue."""
         while self.running and self.bus:
             try:
                 msg = self.bus.recv(timeout=0.1)
@@ -305,8 +416,8 @@ class CANViewer:
         if msg.is_error_frame:
             data = " ".join(f"{b:02X}" for b in msg.data) if msg.data else ""
             self.tree.insert("", tk.END,
-                                   values=(ts, "---", "ERR", "---", data),
-                                   tags=("error",))
+                             values=(ts, "---", "ERR", "---", data),
+                             tags=("error",))
             self.tree.tag_configure("error", foreground="red")
             self.error_count += 1
             self.error_var.set(f"Errors: {self.error_count}")
@@ -318,6 +429,7 @@ class CANViewer:
             self.tree.insert("", tk.END, values=(ts, arb, frame, msg.dlc, data))
             self.message_count += 1
             self.count_var.set(f"Messages: {self.message_count}")
+            self._decode_and_display(msg, ts)
 
         if self.log_writer is not None:
             try:

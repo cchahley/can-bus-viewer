@@ -22,7 +22,7 @@ jobs:
         run: sudo apt-get install -y python3-tk
 
       - name: Install Python dependencies
-        run: pip install python-can ruff mypy
+        run: pip install python-can cantools ruff mypy
 
       - name: Syntax check
         run: python -m py_compile can_viewer.py
