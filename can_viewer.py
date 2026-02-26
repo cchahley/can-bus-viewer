@@ -352,10 +352,18 @@ class CANViewer:
         self.running = False
         if self.bus:
             try:
-                self.bus.shutdown()
+                with _silence_stderr():
+                    self.bus.shutdown()
             except Exception:
                 pass
             self.bus = None
+
+        # Drain stale reader-thread errors so no popup appears after intentional disconnect
+        while not self.message_queue.empty():
+            try:
+                self.message_queue.get_nowait()
+            except queue.Empty:
+                break
 
         if self.log_writer is not None:
             self._stop_logging()

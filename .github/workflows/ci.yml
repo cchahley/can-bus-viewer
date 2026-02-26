@@ -22,7 +22,7 @@ jobs:
         run: sudo apt-get install -y python3-tk
 
       - name: Install Python dependencies
-        run: pip install python-can cantools ruff mypy
+        run: pip install python-can cantools ruff mypy pytest
 
       - name: Syntax check
         run: python -m py_compile can_viewer.py
@@ -32,3 +32,6 @@ jobs:
 
       - name: Type check (mypy)
         run: mypy can_viewer.py --ignore-missing-imports
+
+      - name: Unit tests
+        run: python -m pytest test_can_viewer.py -v
