@@ -126,11 +126,14 @@ class TestClear(unittest.TestCase):
         self.assertEqual(len(self.app.tree.get_children()), 0)
 
     def test_clear_removes_symbolic_rows(self):
-        iid = self.app.sym_tree.insert("", tk.END, values=("M", "S", "1", "V", "ts"))
+        msg_iid = self.app.sym_tree.insert("", tk.END, text="M", values=("", "", "ts", "0.0"))
+        iid = self.app.sym_tree.insert(msg_iid, tk.END, text="S", values=("1", "", "ts", "0.0"))
+        self.app._msg_iids[0x100] = msg_iid
         self.app._signal_iids[(0x100, "S")] = iid
         self.app._clear()
         self.assertEqual(len(self.app.sym_tree.get_children()), 0)
         self.assertEqual(len(self.app._signal_iids), 0)
+        self.assertEqual(len(self.app._msg_iids), 0)
 
 
 # ---------------------------------------------------------------------------
@@ -243,16 +246,19 @@ class TestDecode(unittest.TestCase):
         self.app.db, _ = _make_mock_db(0x100, "EngineData",
                                         {"RPM": 1500.0, "Temp": 85.0})
         self.app._decode_and_display(_normal_msg(arb_id=0x100, data=[0]*8), "ts")
-        self.assertEqual(len(self.app.sym_tree.get_children()), 2)
+        msg_rows = self.app.sym_tree.get_children()
+        self.assertEqual(len(msg_rows), 1)                                      # 1 message parent
+        self.assertEqual(len(self.app.sym_tree.get_children(msg_rows[0])), 2)  # 2 signals
 
     def test_signal_values_in_tree(self):
         self.app.db, _ = _make_mock_db(0x100, "EngineData", {"RPM": 2000.0})
         self.app._decode_and_display(_normal_msg(arb_id=0x100, data=[0]*8), "ts")
-        children = self.app.sym_tree.get_children()
-        vals = self.app.sym_tree.item(children[0])["values"]
-        self.assertEqual(vals[0], "EngineData")   # Message name
-        self.assertEqual(vals[1], "RPM")           # Signal name
-        self.assertIn("2000", str(vals[2]))        # Value
+        msg_rows = self.app.sym_tree.get_children()
+        self.assertEqual(self.app.sym_tree.item(msg_rows[0])["text"], "EngineData")
+        sig_rows = self.app.sym_tree.get_children(msg_rows[0])
+        sig_item = self.app.sym_tree.item(sig_rows[0])
+        self.assertEqual(sig_item["text"], "RPM")
+        self.assertIn("2000", str(sig_item["values"][0]))   # value at index 0
 
     def test_signal_updated_in_place(self):
         """Same signal arriving twice should update the row, not add a new one."""
@@ -262,11 +268,13 @@ class TestDecode(unittest.TestCase):
         db_msg.decode.return_value = {"RPM": 3000.0}
         self.app._decode_and_display(_normal_msg(arb_id=0x100, data=[0]*8), "ts2")
 
-        children = self.app.sym_tree.get_children()
-        self.assertEqual(len(children), 1)           # Still only one row
-        vals = self.app.sym_tree.item(children[0])["values"]
-        self.assertIn("3000", str(vals[2]))          # Value updated
-        self.assertEqual(vals[4], "ts2")             # Timestamp updated
+        msg_rows = self.app.sym_tree.get_children()
+        self.assertEqual(len(msg_rows), 1)                       # Still only one message row
+        sig_rows = self.app.sym_tree.get_children(msg_rows[0])
+        self.assertEqual(len(sig_rows), 1)                       # Still only one signal row
+        sig_item = self.app.sym_tree.item(sig_rows[0])
+        self.assertIn("3000", str(sig_item["values"][0]))        # value at index 0
+        self.assertEqual(sig_item["values"][2], "ts2")           # timestamp at index 2
 
     def test_decode_exception_is_silent(self):
         """Malformed data should not crash the app."""

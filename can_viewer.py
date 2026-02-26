@@ -53,7 +53,8 @@ class CANViewer:
         self.log_format = None
 
         self.db = None
-        self._signal_iids: dict = {}
+        self._signal_iids: dict = {}    # (arb_id, sig_name) → treeview iid
+        self._msg_iids: dict = {}       # arb_id → message parent row iid
         self._trace_start: float | None = None
         self._send_rows: list = []       # raw send rows
         self._dbc_send_rows: list = []   # DBC send rows
@@ -76,7 +77,7 @@ class CANViewer:
         ttk.Label(conn, text="Interface:").grid(row=0, column=0, sticky=tk.W, padx=4)
         self.iface_var = tk.StringVar(value="pcan")
         iface_cb = ttk.Combobox(conn, textvariable=self.iface_var,
-                                 values=["pcan", "vector", "virtual"],
+                                 values=["pcan", "vector", "slcan", "virtual"],
                                  width=8, state="readonly")
         iface_cb.grid(row=0, column=1, padx=4)
         iface_cb.bind("<<ComboboxSelected>>", self._on_iface_change)
@@ -168,20 +169,18 @@ class CANViewer:
         raw_frame.rowconfigure(0, weight=1)
         raw_frame.columnconfigure(0, weight=1)
 
-        # Right: Symbolic  (msg, signal, value, unit, timestamp, rel)
+        # Right: Symbolic — tree view, Message parent → Signal children
         sym_frame = ttk.LabelFrame(pane, text="Symbolic (DBC Decoded)")
         pane.add(sym_frame, minsize=320)
 
-        sym_cols = ("msg", "signal", "value", "unit", "timestamp", "rel")
-        self.sym_tree = ttk.Treeview(sym_frame, columns=sym_cols, show="headings")
-        self.sym_tree.heading("msg",       text="Message")
-        self.sym_tree.heading("signal",    text="Signal")
+        sym_cols = ("value", "unit", "timestamp", "rel")
+        self.sym_tree = ttk.Treeview(sym_frame, columns=sym_cols, show="tree headings")
+        self.sym_tree.heading("#0",        text="Message / Signal", anchor=tk.W)
         self.sym_tree.heading("value",     text="Value")
         self.sym_tree.heading("unit",      text="Unit")
         self.sym_tree.heading("timestamp", text="Timestamp")
         self.sym_tree.heading("rel",       text="Rel (s)")
-        self.sym_tree.column("msg",       width=110, anchor=tk.W)
-        self.sym_tree.column("signal",    width=140, anchor=tk.W)
+        self.sym_tree.column("#0",        width=170, anchor=tk.W)
         self.sym_tree.column("value",     width=80,  anchor=tk.E)
         self.sym_tree.column("unit",      width=45,  anchor=tk.W)
         self.sym_tree.column("timestamp", width=100, anchor=tk.W)
@@ -251,18 +250,10 @@ class CANViewer:
         # ── DBC Signal mode (initially hidden) ───────────────────────────────
         self._dbc_send_frame = ttk.Frame(sf)
 
-        # Header row
-        dbc_hdr = ttk.Frame(self._dbc_send_frame)
-        dbc_hdr.pack(fill=tk.X, padx=2)
-        ttk.Label(dbc_hdr, text="Message", width=17, anchor=tk.W).pack(side=tk.LEFT, padx=(2, 1))
-        ttk.Label(dbc_hdr, text="Signal",  width=17, anchor=tk.W).pack(side=tk.LEFT, padx=1)
-        ttk.Label(dbc_hdr, text="Value",   width=12, anchor=tk.W).pack(side=tk.LEFT, padx=1)
-        ttk.Label(dbc_hdr, text="Periodic / ms", anchor=tk.W).pack(side=tk.LEFT, padx=(10, 1))
-
-        # Scrollable canvas
+        # Scrollable canvas (cards are self-labeling — no header row needed)
         dbc_outer = ttk.Frame(self._dbc_send_frame)
         dbc_outer.pack(fill=tk.X, padx=2)
-        self._dbc_canvas = tk.Canvas(dbc_outer, height=120, highlightthickness=0)
+        self._dbc_canvas = tk.Canvas(dbc_outer, height=180, highlightthickness=0)
         dbc_vsb = ttk.Scrollbar(dbc_outer, orient=tk.VERTICAL,
                                   command=self._dbc_canvas.yview)
         self._dbc_canvas.configure(yscrollcommand=dbc_vsb.set)
@@ -387,78 +378,63 @@ class CANViewer:
     # ─── DBC send rows ────────────────────────────────────────────────────────
 
     def _add_dbc_send_row(self):
-        row = ttk.Frame(self._dbc_rows_frame)
-        row.pack(fill=tk.X, pady=1)
+        """Add a card-style DBC send row: header + one sub-row per signal."""
+        card = ttk.Frame(self._dbc_rows_frame, relief=tk.GROOVE, borderwidth=1)
+        card.pack(fill=tk.X, pady=2, padx=2)
 
-        msg_var     = tk.StringVar()
-        sig_var     = tk.StringVar()
-        val_var     = tk.StringVar(value="0")
-        choice_var  = tk.StringVar()
+        msg_var      = tk.StringVar()
         periodic_var = tk.BooleanVar(value=False)
-        period_var  = tk.StringVar(value="100")
+        period_var   = tk.StringVar(value="100")
 
         row_data = {
-            "msg_var":       msg_var,
-            "sig_var":       sig_var,
-            "val_var":       val_var,
-            "choice_var":    choice_var,
-            "periodic_var":  periodic_var,
-            "period_var":    period_var,
-            "_value_is_enum": False,
-            "frame":         row,
-            "_after_id":     None,
+            "msg_var":      msg_var,
+            "msg_cb":       None,
+            "sig_frame":    None,
+            "sig_rows":     {},          # sig_name → {"val_var", "_is_enum", "_choices"}
+            "periodic_var": periodic_var,
+            "period_var":   period_var,
+            "btn_send":     None,
+            "frame":        card,
+            "_after_id":    None,
         }
 
-        # Message combobox
-        msg_cb = ttk.Combobox(row, textvariable=msg_var, width=16, state="readonly")
+        # ── Header row ────────────────────────────────────────────────────────
+        hdr = ttk.Frame(card)
+        hdr.pack(fill=tk.X, padx=2, pady=(2, 0))
+
+        msg_cb = ttk.Combobox(hdr, textvariable=msg_var, width=22, state="readonly")
         if self.db:
             msg_cb["values"] = sorted(m.name for m in self.db.messages)
-        msg_cb.pack(side=tk.LEFT, padx=(2, 1))
+        msg_cb.pack(side=tk.LEFT, padx=(0, 4))
         msg_cb.bind("<<ComboboxSelected>>",
                     lambda _, rd=row_data: self._on_dbc_msg_change(rd))
         row_data["msg_cb"] = msg_cb
 
-        # Signal combobox
-        sig_cb = ttk.Combobox(row, textvariable=sig_var, width=16, state="readonly")
-        sig_cb.pack(side=tk.LEFT, padx=1)
-        sig_cb.bind("<<ComboboxSelected>>",
-                    lambda _, rd=row_data: self._on_dbc_sig_change(rd))
-        row_data["sig_cb"] = sig_cb
-
-        # Value frame: holds either a numeric entry or an enum combobox
-        val_frame = ttk.Frame(row)
-        val_frame.pack(side=tk.LEFT, padx=1)
-        row_data["val_frame"] = val_frame
-
-        val_entry = ttk.Entry(val_frame, textvariable=val_var, width=11)
-        val_entry.pack(side=tk.LEFT)   # shown by default
-        row_data["val_entry"] = val_entry
-
-        choice_cb = ttk.Combobox(val_frame, textvariable=choice_var,
-                                  width=13, state="readonly")
-        row_data["choice_cb"] = choice_cb   # not packed until needed
-
-        # Periodic controls
-        ttk.Checkbutton(row, text="", variable=periodic_var,
+        ttk.Checkbutton(hdr, text="Periodic", variable=periodic_var,
                         command=lambda rd=row_data: self._on_periodic_toggle(rd)
-                        ).pack(side=tk.LEFT, padx=(10, 1))
-        ttk.Entry(row, textvariable=period_var, width=5).pack(side=tk.LEFT, padx=1)
-        ttk.Label(row, text="ms").pack(side=tk.LEFT, padx=(0, 2))
+                        ).pack(side=tk.LEFT, padx=(0, 1))
+        ttk.Entry(hdr, textvariable=period_var, width=5).pack(side=tk.LEFT, padx=1)
+        ttk.Label(hdr, text="ms").pack(side=tk.LEFT, padx=(0, 6))
 
         state = tk.NORMAL if self.bus else tk.DISABLED
-        btn = ttk.Button(row, text="Send", width=5, state=state,
+        btn = ttk.Button(hdr, text="Send", width=5, state=state,
                          command=lambda rd=row_data: self._send_dbc_row(rd))
-        btn.pack(side=tk.LEFT, padx=(4, 2))
+        btn.pack(side=tk.LEFT, padx=(0, 2))
         row_data["btn_send"] = btn
         row_data["send_fn"]  = lambda rd=row_data: self._send_dbc_row(rd)
 
-        ttk.Button(row, text="X", width=2,
-                   command=lambda rf=row, rd=row_data: self._remove_dbc_send_row(rf, rd)
+        ttk.Button(hdr, text="X", width=2,
+                   command=lambda cf=card, rd=row_data: self._remove_dbc_send_row(cf, rd)
                    ).pack(side=tk.LEFT, padx=2)
+
+        # ── Signal sub-frame (populated by _on_dbc_msg_change) ────────────────
+        sig_frame = ttk.Frame(card)
+        sig_frame.pack(fill=tk.X, padx=(20, 2), pady=(2, 4))
+        row_data["sig_frame"] = sig_frame
 
         self._dbc_send_rows.append(row_data)
 
-        # If DBC is already loaded, populate this row immediately
+        # If DBC is already loaded, populate this card immediately
         if self.db:
             msg_names = sorted(m.name for m in self.db.messages)
             if msg_names:
@@ -478,76 +454,83 @@ class CANViewer:
         self._dbc_canvas.configure(scrollregion=self._dbc_canvas.bbox("all"))
 
     def _on_dbc_msg_change(self, row_data):
+        """Rebuild the signal sub-frame to show one row per signal in the chosen message."""
         if self.db is None:
             return
         try:
             db_msg = self.db.get_message_by_name(row_data["msg_var"].get())
-            signals = sorted(s.name for s in db_msg.signals)
-            row_data["sig_cb"]["values"] = signals
-            if signals:
-                row_data["sig_var"].set(signals[0])
-                self._update_dbc_value_widget(row_data)
-        except Exception:
-            pass
-
-    def _on_dbc_sig_change(self, row_data):
-        self._update_dbc_value_widget(row_data)
-
-    def _update_dbc_value_widget(self, row_data):
-        """Show a numeric entry or an enum combobox depending on the signal's choices."""
-        if self.db is None:
-            return
-        try:
-            db_msg = self.db.get_message_by_name(row_data["msg_var"].get())
-            sig    = db_msg.get_signal_by_name(row_data["sig_var"].get())
         except Exception:
             return
 
-        if sig.choices:
-            row_data["val_entry"].pack_forget()
-            labels = [str(v) for v in sig.choices.values()]
-            row_data["choice_cb"]["values"] = labels
-            if labels:
-                row_data["choice_var"].set(labels[0])
-            row_data["choice_cb"].pack(side=tk.LEFT)
-            row_data["_value_is_enum"] = True
-        else:
-            row_data["choice_cb"].pack_forget()
-            row_data["val_entry"].pack(side=tk.LEFT)
-            row_data["_value_is_enum"] = False
+        sig_frame = row_data["sig_frame"]
+        # Destroy existing signal widgets
+        for w in sig_frame.winfo_children():
+            w.destroy()
+        row_data["sig_rows"].clear()
+
+        for sig in sorted(db_msg.signals, key=lambda s: s.name):
+            sig_row = ttk.Frame(sig_frame)
+            sig_row.pack(fill=tk.X, pady=1)
+
+            ttk.Label(sig_row, text=sig.name, width=20, anchor=tk.W).pack(side=tk.LEFT, padx=(0, 4))
+
+            val_var = tk.StringVar()
+
+            if sig.choices:
+                labels = [str(v) for v in sig.choices.values()]
+                val_var.set(labels[0] if labels else "")
+                cb = ttk.Combobox(sig_row, textvariable=val_var,
+                                  values=labels, width=14, state="readonly")
+                cb.pack(side=tk.LEFT, padx=1)
+                row_data["sig_rows"][sig.name] = {
+                    "val_var":   val_var,
+                    "_is_enum":  True,
+                    "_choices":  sig.choices,
+                }
+            else:
+                val_var.set("0")
+                ttk.Entry(sig_row, textvariable=val_var, width=12).pack(side=tk.LEFT, padx=1)
+                unit_text = sig.unit if sig.unit else ""
+                ttk.Label(sig_row, text=unit_text, width=6, anchor=tk.W).pack(side=tk.LEFT)
+                row_data["sig_rows"][sig.name] = {
+                    "val_var":  val_var,
+                    "_is_enum": False,
+                }
+
+        self._dbc_rows_frame.update_idletasks()
+        self._dbc_canvas.configure(scrollregion=self._dbc_canvas.bbox("all"))
 
     def _send_dbc_row(self, row_data):
         if self.bus is None or self.db is None:
             return
         try:
-            db_msg   = self.db.get_message_by_name(row_data["msg_var"].get())
-            sig_name = row_data["sig_var"].get()
-            if not sig_name:
-                return
-            sig = db_msg.get_signal_by_name(sig_name)
+            db_msg = self.db.get_message_by_name(row_data["msg_var"].get())
+        except Exception as exc:
+            messagebox.showerror("Send Error", str(exc))
+            return
 
-            if row_data["_value_is_enum"] and sig.choices:
-                label = row_data["choice_var"].get()
-                # Reverse lookup: label string → numeric key
-                value = next(
-                    (k for k, v in sig.choices.items() if str(v) == label), 0)
-            else:
-                value = float(row_data["val_var"].get())
-
-            # cantools requires ALL signals in the message to be provided.
-            # Build a complete dict: default every signal to its minimum (or
-            # first choice), then override with the user's chosen value.
-            sig_data: dict = {}
-            for s in db_msg.signals:
-                if s.name == sig_name:
-                    sig_data[s.name] = value
-                elif s.choices:
-                    sig_data[s.name] = next(iter(s.choices.keys()), 0)
-                elif s.minimum is not None:
-                    sig_data[s.name] = s.minimum
+        sig_data: dict = {}
+        for sig in db_msg.signals:
+            entry = row_data["sig_rows"].get(sig.name)
+            if entry is None:
+                # Signal not in UI (shouldn't happen) — use safe default
+                if sig.choices:
+                    sig_data[sig.name] = next(iter(sig.choices.keys()), 0)
+                elif sig.minimum is not None:
+                    sig_data[sig.name] = sig.minimum
                 else:
-                    sig_data[s.name] = 0
+                    sig_data[sig.name] = 0
+            elif entry["_is_enum"]:
+                label = entry["val_var"].get()
+                sig_data[sig.name] = next(
+                    (k for k, v in entry["_choices"].items() if str(v) == label), 0)
+            else:
+                try:
+                    sig_data[sig.name] = float(entry["val_var"].get())
+                except ValueError:
+                    sig_data[sig.name] = 0.0
 
+        try:
             data = db_msg.encode(sig_data, padding=True)
             msg  = can.Message(
                 arbitration_id=db_msg.frame_id,
@@ -621,6 +604,19 @@ class CANViewer:
             self.bar_var.set("Virtual CAN — no hardware required, loopback enabled")
             return
 
+        if iface == "slcan":
+            try:
+                import serial.tools.list_ports as slp
+                ports = sorted(p.device for p in slp.comports())
+            except ImportError:
+                ports = []
+            self.channel_cb["values"] = ports
+            self.channel_var.set(ports[0] if ports else "COM3")
+            self.btn_connect.config(state=tk.NORMAL)
+            self.bar_var.set(
+                "CANable/SLCAN — select or type serial port (e.g. COM3)")
+            return
+
         try:
             with _silence_stderr():
                 configs = can.detect_available_configs(interfaces=[iface])
@@ -669,6 +665,7 @@ class CANViewer:
 
         self.sym_tree.delete(*self.sym_tree.get_children())
         self._signal_iids.clear()
+        self._msg_iids.clear()
 
         # Refresh all DBC send rows with the new message list
         msg_names = sorted(m.name for m in self.db.messages)
@@ -680,7 +677,7 @@ class CANViewer:
                 self._on_dbc_msg_change(rd)
 
     def _decode_and_display(self, msg: can.Message, ts: str, rel: str = "0.000"):
-        """Decode msg signals via DBC and update the symbolic live view."""
+        """Decode msg signals via DBC and update the symbolic live tree."""
         if self.db is None or msg.is_error_frame:
             return
         try:
@@ -691,18 +688,33 @@ class CANViewer:
             signals = db_msg.decode(msg.data, decode_choices=True)
         except Exception:
             return
+
+        arb_id = msg.arbitration_id
+
+        # Ensure message parent row exists
+        if arb_id not in self._msg_iids:
+            msg_iid = self.sym_tree.insert(
+                "", tk.END, text=db_msg.name, open=True,
+                values=("", "", ts, rel))
+            self._msg_iids[arb_id] = msg_iid
+        else:
+            # Update last-seen timestamps on the message row
+            self.sym_tree.item(self._msg_iids[arb_id], values=("", "", ts, rel))
+
+        parent_iid = self._msg_iids[arb_id]
+
         for sig_name, value in signals.items():
             sig_def = db_msg.get_signal_by_name(sig_name)
             unit    = sig_def.unit or ""
             val_str = f"{value:.4g}" if isinstance(value, float) else str(value)
-            key = (msg.arbitration_id, sig_name)
+            key = (arb_id, sig_name)
             if key in self._signal_iids:
                 self.sym_tree.item(self._signal_iids[key],
-                                   values=(db_msg.name, sig_name, val_str, unit, ts, rel))
+                                   values=(val_str, unit, ts, rel))
             else:
                 iid = self.sym_tree.insert(
-                    "", tk.END,
-                    values=(db_msg.name, sig_name, val_str, unit, ts, rel))
+                    parent_iid, tk.END,
+                    text=sig_name, values=(val_str, unit, ts, rel))
                 self._signal_iids[key] = iid
 
     # --------------------------------------------------------------- logging --
@@ -828,6 +840,7 @@ class CANViewer:
         self.tree.delete(*self.tree.get_children())
         self.sym_tree.delete(*self.sym_tree.get_children())
         self._signal_iids.clear()
+        self._msg_iids.clear()
         self.message_count = 0
         self.error_count = 0
         self.count_var.set("Messages: 0")
