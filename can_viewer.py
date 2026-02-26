@@ -5,6 +5,7 @@ Requires: pip install python-can cantools
 import contextlib
 import csv
 import os
+import time
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 import threading
@@ -38,8 +39,8 @@ class CANViewer:
     def __init__(self, root):
         self.root = root
         self.root.title("CAN Bus Viewer")
-        self.root.geometry("1400x820")
-        self.root.minsize(900, 550)
+        self.root.geometry("1400x900")
+        self.root.minsize(900, 600)
 
         self.bus = None
         self.running = False
@@ -51,8 +52,10 @@ class CANViewer:
         self.log_file = None
         self.log_format = None
 
-        self.db = None                # cantools database
-        self._signal_iids: dict = {}  # (msg_id, signal_name) → treeview iid
+        self.db = None                    # cantools database
+        self._signal_iids: dict = {}      # (msg_id, signal_name) → treeview iid
+        self._trace_start: float | None = None
+        self._send_rows: list = []        # list of row dicts
 
         self._build_ui()
         self._scan_channels()
@@ -61,8 +64,7 @@ class CANViewer:
     # ------------------------------------------------------------------ UI --
 
     def _build_ui(self):
-        # Status bar is packed first (side=BOTTOM) so the expanding pane
-        # and send panel don't squeeze it out.
+        # Status bar (packed first at bottom so it never gets squeezed)
         self.bar_var = tk.StringVar(value="Ready")
         ttk.Label(self.root, textvariable=self.bar_var,
                   relief=tk.SUNKEN, anchor=tk.W).pack(
@@ -141,22 +143,24 @@ class CANViewer:
                               sashrelief=tk.RAISED, sashwidth=5)
         pane.pack(fill=tk.BOTH, expand=True, padx=10, pady=4)
 
-        # Left: Raw CAN
+        # Left: Raw CAN  (columns: time, rel, id, ext, dlc, data)
         raw_frame = ttk.LabelFrame(pane, text="Raw CAN")
         pane.add(raw_frame, minsize=420)
 
-        raw_cols = ("time", "id", "ext", "dlc", "data")
+        raw_cols = ("time", "rel", "id", "ext", "dlc", "data")
         self.tree = ttk.Treeview(raw_frame, columns=raw_cols, show="headings")
-        self.tree.heading("time",  text="Timestamp")
+        self.tree.heading("time", text="Timestamp")
+        self.tree.heading("rel",  text="Rel (s)")
         self.tree.heading("id",   text="Arb ID (hex)")
         self.tree.heading("ext",  text="Frame")
         self.tree.heading("dlc",  text="DLC")
         self.tree.heading("data", text="Data (hex)")
-        self.tree.column("time",  width=115, anchor=tk.W)
+        self.tree.column("time", width=110, anchor=tk.W)
+        self.tree.column("rel",  width=72,  anchor=tk.E)
         self.tree.column("id",   width=100, anchor=tk.CENTER)
-        self.tree.column("ext",  width=55,  anchor=tk.CENTER)
-        self.tree.column("dlc",  width=40,  anchor=tk.CENTER)
-        self.tree.column("data", width=280, anchor=tk.W)
+        self.tree.column("ext",  width=50,  anchor=tk.CENTER)
+        self.tree.column("dlc",  width=38,  anchor=tk.CENTER)
+        self.tree.column("data", width=260, anchor=tk.W)
 
         raw_vsb = ttk.Scrollbar(raw_frame, orient=tk.VERTICAL,   command=self.tree.yview)
         raw_hsb = ttk.Scrollbar(raw_frame, orient=tk.HORIZONTAL, command=self.tree.xview)
@@ -167,22 +171,24 @@ class CANViewer:
         raw_frame.rowconfigure(0, weight=1)
         raw_frame.columnconfigure(0, weight=1)
 
-        # Right: Symbolic (DBC decoded) — live signal values, one row per signal
+        # Right: Symbolic (DBC decoded)  (columns: msg, signal, value, unit, timestamp, rel)
         sym_frame = ttk.LabelFrame(pane, text="Symbolic (DBC Decoded)")
         pane.add(sym_frame, minsize=320)
 
-        sym_cols = ("msg", "signal", "value", "unit", "updated")
+        sym_cols = ("msg", "signal", "value", "unit", "timestamp", "rel")
         self.sym_tree = ttk.Treeview(sym_frame, columns=sym_cols, show="headings")
-        self.sym_tree.heading("msg",     text="Message")
-        self.sym_tree.heading("signal",  text="Signal")
-        self.sym_tree.heading("value",   text="Value")
-        self.sym_tree.heading("unit",    text="Unit")
-        self.sym_tree.heading("updated", text="Updated")
-        self.sym_tree.column("msg",     width=120, anchor=tk.W)
-        self.sym_tree.column("signal",  width=150, anchor=tk.W)
-        self.sym_tree.column("value",   width=90,  anchor=tk.E)
-        self.sym_tree.column("unit",    width=55,  anchor=tk.W)
-        self.sym_tree.column("updated", width=110, anchor=tk.W)
+        self.sym_tree.heading("msg",       text="Message")
+        self.sym_tree.heading("signal",    text="Signal")
+        self.sym_tree.heading("value",     text="Value")
+        self.sym_tree.heading("unit",      text="Unit")
+        self.sym_tree.heading("timestamp", text="Timestamp")
+        self.sym_tree.heading("rel",       text="Rel (s)")
+        self.sym_tree.column("msg",       width=110, anchor=tk.W)
+        self.sym_tree.column("signal",    width=140, anchor=tk.W)
+        self.sym_tree.column("value",     width=80,  anchor=tk.E)
+        self.sym_tree.column("unit",      width=45,  anchor=tk.W)
+        self.sym_tree.column("timestamp", width=100, anchor=tk.W)
+        self.sym_tree.column("rel",       width=65,  anchor=tk.E)
 
         sym_vsb = ttk.Scrollbar(sym_frame, orient=tk.VERTICAL, command=self.sym_tree.yview)
         self.sym_tree.configure(yscrollcommand=sym_vsb.set)
@@ -194,73 +200,226 @@ class CANViewer:
         # --- Send panel ---
         self._build_send_panel()
 
+    # --------------------------------------------------------- send panel ---
+
     def _build_send_panel(self):
-        sf = ttk.LabelFrame(self.root, text="Send CAN Message", padding=6)
+        sf = ttk.LabelFrame(self.root, text="Send CAN Message", padding=4)
         sf.pack(fill=tk.X, padx=10, pady=(0, 4))
 
-        row = ttk.Frame(sf)
-        row.pack(fill=tk.X)
+        # Mode selector
+        mode_row = ttk.Frame(sf)
+        mode_row.pack(fill=tk.X, pady=(0, 4))
 
-        # Mode selection
         self.send_mode_var = tk.StringVar(value="raw")
-        ttk.Radiobutton(row, text="Raw", variable=self.send_mode_var,
+        ttk.Radiobutton(mode_row, text="Raw", variable=self.send_mode_var,
                         value="raw", command=self._on_send_mode_change).pack(
             side=tk.LEFT, padx=(0, 2))
-        ttk.Radiobutton(row, text="DBC Signal", variable=self.send_mode_var,
+        ttk.Radiobutton(mode_row, text="DBC Signal", variable=self.send_mode_var,
                         value="dbc", command=self._on_send_mode_change).pack(
             side=tk.LEFT, padx=(0, 6))
-        ttk.Separator(row, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, pady=2, padx=6)
 
-        # --- Raw sub-frame ---
-        self._raw_send_frame = ttk.Frame(row)
-        self._raw_send_frame.pack(side=tk.LEFT)
+        # ── Raw mode: scrollable list of rows ────────────────────────────────
+        self._raw_send_frame = ttk.Frame(sf)
+        self._raw_send_frame.pack(fill=tk.X)
 
-        ttk.Label(self._raw_send_frame, text="ID (hex):").pack(side=tk.LEFT, padx=(4, 2))
-        self.send_id_var = tk.StringVar(value="100")
-        ttk.Entry(self._raw_send_frame, textvariable=self.send_id_var,
-                  width=8).pack(side=tk.LEFT, padx=2)
+        # Column header labels
+        hdr = ttk.Frame(self._raw_send_frame)
+        hdr.pack(fill=tk.X, padx=2)
+        ttk.Label(hdr, text="ID (hex)", width=9, anchor=tk.W).pack(side=tk.LEFT, padx=(2, 1))
+        ttk.Label(hdr, text="Ext",      width=4, anchor=tk.CENTER).pack(side=tk.LEFT, padx=1)
+        for i in range(8):
+            ttk.Label(hdr, text=f"B{i}", width=3, anchor=tk.CENTER).pack(side=tk.LEFT, padx=1)
 
-        self.send_ext_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(self._raw_send_frame, text="Ext",
-                        variable=self.send_ext_var).pack(side=tk.LEFT, padx=4)
+        # Canvas + scrollbar for rows
+        canvas_outer = ttk.Frame(self._raw_send_frame)
+        canvas_outer.pack(fill=tk.X, padx=2)
 
-        ttk.Label(self._raw_send_frame, text="Data (hex):").pack(side=tk.LEFT, padx=(8, 2))
-        self.send_data_var = tk.StringVar(value="")
-        ttk.Entry(self._raw_send_frame, textvariable=self.send_data_var,
-                  width=34).pack(side=tk.LEFT, padx=2)
+        self._send_canvas = tk.Canvas(canvas_outer, height=120, highlightthickness=0)
+        send_vsb = ttk.Scrollbar(canvas_outer, orient=tk.VERTICAL,
+                                  command=self._send_canvas.yview)
+        self._send_canvas.configure(yscrollcommand=send_vsb.set)
+        self._send_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        send_vsb.pack(side=tk.RIGHT, fill=tk.Y)
 
-        # --- DBC sub-frame (initially hidden) ---
-        self._dbc_send_frame = ttk.Frame(row)
+        self._send_rows_frame = ttk.Frame(self._send_canvas)
+        self._send_canvas_window = self._send_canvas.create_window(
+            (0, 0), window=self._send_rows_frame, anchor=tk.NW)
 
-        ttk.Label(self._dbc_send_frame, text="Message:").pack(side=tk.LEFT, padx=(4, 2))
+        self._send_rows_frame.bind("<Configure>", self._on_send_frame_configure)
+        self._send_canvas.bind("<Configure>", self._on_send_canvas_configure)
+
+        ttk.Button(self._raw_send_frame, text="+ Add Row",
+                   command=self._add_send_row).pack(anchor=tk.W, padx=2, pady=2)
+
+        # ── DBC mode frame (initially hidden) ────────────────────────────────
+        self._dbc_send_frame = ttk.Frame(sf)
+
+        dbc_inner = ttk.Frame(self._dbc_send_frame)
+        dbc_inner.pack(fill=tk.X)
+
+        ttk.Label(dbc_inner, text="Message:").pack(side=tk.LEFT, padx=(4, 2))
         self.send_msg_var = tk.StringVar()
-        self.send_msg_cb = ttk.Combobox(self._dbc_send_frame,
-                                         textvariable=self.send_msg_var,
+        self.send_msg_cb = ttk.Combobox(dbc_inner, textvariable=self.send_msg_var,
                                          width=20, state="readonly")
         self.send_msg_cb.pack(side=tk.LEFT, padx=2)
         self.send_msg_cb.bind("<<ComboboxSelected>>", self._on_send_msg_change)
 
-        ttk.Label(self._dbc_send_frame, text="Signal:").pack(side=tk.LEFT, padx=(8, 2))
+        ttk.Label(dbc_inner, text="Signal:").pack(side=tk.LEFT, padx=(8, 2))
         self.send_sig_var = tk.StringVar()
-        self.send_sig_cb = ttk.Combobox(self._dbc_send_frame,
-                                         textvariable=self.send_sig_var,
+        self.send_sig_cb = ttk.Combobox(dbc_inner, textvariable=self.send_sig_var,
                                          width=20, state="readonly")
         self.send_sig_cb.pack(side=tk.LEFT, padx=2)
         self.send_sig_cb.bind("<<ComboboxSelected>>", self._on_send_sig_change)
 
-        ttk.Label(self._dbc_send_frame, text="Value:").pack(side=tk.LEFT, padx=(8, 2))
+        ttk.Label(dbc_inner, text="Value:").pack(side=tk.LEFT, padx=(8, 2))
         self.send_val_var = tk.StringVar(value="0")
-        ttk.Entry(self._dbc_send_frame, textvariable=self.send_val_var,
-                  width=10).pack(side=tk.LEFT, padx=2)
+        ttk.Entry(dbc_inner, textvariable=self.send_val_var, width=10).pack(
+            side=tk.LEFT, padx=2)
 
         self.send_unit_var = tk.StringVar(value="")
-        ttk.Label(self._dbc_send_frame, textvariable=self.send_unit_var,
+        ttk.Label(dbc_inner, textvariable=self.send_unit_var,
                   width=6, foreground="gray").pack(side=tk.LEFT, padx=2)
 
-        # Send button (always visible, right side)
-        self.btn_send = ttk.Button(row, text="Send",
-                                    command=self._send_message, state=tk.DISABLED)
-        self.btn_send.pack(side=tk.RIGHT, padx=8)
+        self._dbc_send_btn = ttk.Button(dbc_inner, text="Send",
+                                         command=self._send_dbc, state=tk.DISABLED)
+        self._dbc_send_btn.pack(side=tk.LEFT, padx=(8, 4))
+
+        # Populate with 3 initial rows
+        for _ in range(3):
+            self._add_send_row()
+
+    # ─── send-canvas helpers ──────────────────────────────────────────────────
+
+    def _on_send_frame_configure(self, _=None):
+        self._send_canvas.configure(scrollregion=self._send_canvas.bbox("all"))
+
+    def _on_send_canvas_configure(self, event):
+        self._send_canvas.itemconfig(self._send_canvas_window, width=event.width)
+
+    def _add_send_row(self):
+        row = ttk.Frame(self._send_rows_frame)
+        row.pack(fill=tk.X, pady=1)
+
+        id_var = tk.StringVar(value="100")
+        ttk.Entry(row, textvariable=id_var, width=9).pack(side=tk.LEFT, padx=(2, 1))
+
+        ext_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(row, variable=ext_var, text="").pack(side=tk.LEFT, padx=1)
+
+        byte_vars = []
+        for _ in range(8):
+            bv = tk.StringVar(value="")
+            ttk.Entry(row, textvariable=bv, width=3).pack(side=tk.LEFT, padx=1)
+            byte_vars.append(bv)
+
+        row_data = {
+            "id_var":   id_var,
+            "ext_var":  ext_var,
+            "byte_vars": byte_vars,
+            "frame":    row,
+        }
+
+        state = tk.NORMAL if self.bus else tk.DISABLED
+        btn = ttk.Button(row, text="Send", width=5, state=state,
+                         command=lambda rd=row_data: self._send_row_message(rd))
+        btn.pack(side=tk.LEFT, padx=(4, 2))
+        row_data["btn_send"] = btn
+
+        ttk.Button(row, text="X", width=2,
+                   command=lambda rf=row, rd=row_data: self._remove_send_row(rf, rd)
+                   ).pack(side=tk.LEFT, padx=2)
+
+        self._send_rows.append(row_data)
+        self._send_rows_frame.update_idletasks()
+        self._send_canvas.configure(scrollregion=self._send_canvas.bbox("all"))
+        self._send_canvas.yview_moveto(1.0)
+
+    def _remove_send_row(self, row_frame, row_data):
+        row_frame.destroy()
+        if row_data in self._send_rows:
+            self._send_rows.remove(row_data)
+        self._send_rows_frame.update_idletasks()
+        self._send_canvas.configure(scrollregion=self._send_canvas.bbox("all"))
+
+    def _send_row_message(self, row_data):
+        if self.bus is None:
+            return
+        try:
+            arb_id = int(row_data["id_var"].get().strip(), 16)
+            data = []
+            for bv in row_data["byte_vars"]:
+                val = bv.get().strip()
+                if val:
+                    data.append(int(val, 16))
+            msg = can.Message(
+                arbitration_id=arb_id,
+                data=bytes(data),
+                is_extended_id=row_data["ext_var"].get(),
+            )
+            self.bus.send(msg)
+        except Exception as exc:
+            messagebox.showerror("Send Error", str(exc))
+
+    def _set_send_buttons_state(self, state):
+        for rd in self._send_rows:
+            rd["btn_send"].config(state=state)
+        if hasattr(self, "_dbc_send_btn"):
+            self._dbc_send_btn.config(state=state)
+
+    # ─── send mode toggle ─────────────────────────────────────────────────────
+
+    def _on_send_mode_change(self):
+        if self.send_mode_var.get() == "raw":
+            self._dbc_send_frame.pack_forget()
+            self._raw_send_frame.pack(fill=tk.X)
+        else:
+            self._raw_send_frame.pack_forget()
+            self._dbc_send_frame.pack(fill=tk.X)
+
+    def _on_send_msg_change(self, _=None):
+        if self.db is None:
+            return
+        try:
+            db_msg = self.db.get_message_by_name(self.send_msg_var.get())
+            signals = sorted(s.name for s in db_msg.signals)
+            self.send_sig_cb["values"] = signals
+            if signals:
+                self.send_sig_var.set(signals[0])
+                self._update_send_unit()
+        except Exception:
+            pass
+
+    def _on_send_sig_change(self, _=None):
+        self._update_send_unit()
+
+    def _update_send_unit(self):
+        if self.db is None:
+            self.send_unit_var.set("")
+            return
+        try:
+            db_msg = self.db.get_message_by_name(self.send_msg_var.get())
+            sig = db_msg.get_signal_by_name(self.send_sig_var.get())
+            self.send_unit_var.set(sig.unit or "")
+        except Exception:
+            self.send_unit_var.set("")
+
+    def _send_dbc(self):
+        if self.db is None:
+            messagebox.showerror("No DBC", "Load a DBC file first.")
+            return
+        try:
+            db_msg = self.db.get_message_by_name(self.send_msg_var.get())
+            sig_name = self.send_sig_var.get()
+            value = float(self.send_val_var.get())
+            data = db_msg.encode({sig_name: value}, padding=True)
+            msg = can.Message(
+                arbitration_id=db_msg.frame_id,
+                data=data,
+                is_extended_id=db_msg.is_extended_frame,
+            )
+            self.bus.send(msg)
+        except Exception as exc:
+            messagebox.showerror("Send Error", str(exc))
 
     # --------------------------------------------------------- device scan --
 
@@ -320,18 +479,16 @@ class CANViewer:
         self.dbc_var.set(
             f"DBC: {os.path.basename(filename)}  ({len(self.db.messages)} msgs)")
 
-        # Clear symbolic view — signals from the old DBC are stale
         self.sym_tree.delete(*self.sym_tree.get_children())
         self._signal_iids.clear()
 
-        # Populate send panel message dropdown
         msg_names = sorted(m.name for m in self.db.messages)
         self.send_msg_cb["values"] = msg_names
         if msg_names:
             self.send_msg_var.set(msg_names[0])
             self._on_send_msg_change()
 
-    def _decode_and_display(self, msg: can.Message, ts: str):
+    def _decode_and_display(self, msg: can.Message, ts: str, rel: str = "0.000"):
         """Decode msg signals via DBC and update the symbolic live view."""
         if self.db is None or msg.is_error_frame:
             return
@@ -350,88 +507,12 @@ class CANViewer:
             key = (msg.arbitration_id, sig_name)
             if key in self._signal_iids:
                 self.sym_tree.item(self._signal_iids[key],
-                                   values=(db_msg.name, sig_name, val_str, unit, ts))
+                                   values=(db_msg.name, sig_name, val_str, unit, ts, rel))
             else:
                 iid = self.sym_tree.insert(
-                    "", tk.END, values=(db_msg.name, sig_name, val_str, unit, ts))
+                    "", tk.END,
+                    values=(db_msg.name, sig_name, val_str, unit, ts, rel))
                 self._signal_iids[key] = iid
-
-    # ---------------------------------------------------------- send panel --
-
-    def _on_send_mode_change(self):
-        if self.send_mode_var.get() == "raw":
-            self._dbc_send_frame.pack_forget()
-            self._raw_send_frame.pack(side=tk.LEFT)
-        else:
-            self._raw_send_frame.pack_forget()
-            self._dbc_send_frame.pack(side=tk.LEFT)
-
-    def _on_send_msg_change(self, _=None):
-        if self.db is None:
-            return
-        try:
-            db_msg = self.db.get_message_by_name(self.send_msg_var.get())
-            signals = sorted(s.name for s in db_msg.signals)
-            self.send_sig_cb["values"] = signals
-            if signals:
-                self.send_sig_var.set(signals[0])
-                self._update_send_unit()
-        except Exception:
-            pass
-
-    def _on_send_sig_change(self, _=None):
-        self._update_send_unit()
-
-    def _update_send_unit(self):
-        if self.db is None:
-            self.send_unit_var.set("")
-            return
-        try:
-            db_msg = self.db.get_message_by_name(self.send_msg_var.get())
-            sig = db_msg.get_signal_by_name(self.send_sig_var.get())
-            self.send_unit_var.set(sig.unit or "")
-        except Exception:
-            self.send_unit_var.set("")
-
-    def _send_message(self):
-        if self.bus is None:
-            return
-        if self.send_mode_var.get() == "raw":
-            self._send_raw()
-        else:
-            self._send_dbc()
-
-    def _send_raw(self):
-        try:
-            arb_id = int(self.send_id_var.get().strip(), 16)
-            data_str = self.send_data_var.get().strip()
-            data = bytes(int(b, 16) for b in data_str.split()) if data_str else b""
-            msg = can.Message(
-                arbitration_id=arb_id,
-                data=data,
-                is_extended_id=self.send_ext_var.get(),
-            )
-            self.bus.send(msg)
-        except Exception as exc:
-            messagebox.showerror("Send Error", str(exc))
-
-    def _send_dbc(self):
-        if self.db is None:
-            messagebox.showerror("No DBC", "Load a DBC file first.")
-            return
-        try:
-            db_msg = self.db.get_message_by_name(self.send_msg_var.get())
-            sig_name = self.send_sig_var.get()
-            value = float(self.send_val_var.get())
-            data = db_msg.encode({sig_name: value}, padding=True)
-            msg = can.Message(
-                arbitration_id=db_msg.frame_id,
-                data=data,
-                is_extended_id=db_msg.is_extended_frame,
-            )
-            self.bus.send(msg)
-        except Exception as exc:
-            messagebox.showerror("Send Error", str(exc))
 
     # --------------------------------------------------------------- logging --
 
@@ -511,15 +592,17 @@ class CANViewer:
             self.bar_var.set(f"Error: {exc}")
             return
 
+        self._trace_start = None
         self.running = True
         threading.Thread(target=self._reader, daemon=True).start()
 
         self.btn_connect.config(state=tk.DISABLED)
         self.btn_disconnect.config(state=tk.NORMAL)
-        self.btn_send.config(state=tk.NORMAL)
+        self._set_send_buttons_state(tk.NORMAL)
         self.status_var.set("Connected")
         self.status_lbl.config(foreground="green")
-        label = "Virtual (loopback)" if iface == "virtual" else f"{iface.upper()}  channel={channel}  bitrate={bitrate} bps"
+        label = ("Virtual (loopback)" if iface == "virtual"
+                 else f"{iface.upper()}  channel={channel}  bitrate={bitrate} bps")
         self.bar_var.set(f"Connected  |  {label}")
 
     def _disconnect(self):
@@ -532,7 +615,7 @@ class CANViewer:
                 pass
             self.bus = None
 
-        # Drain stale reader-thread errors so no popup appears after intentional disconnect
+        # Drain stale reader-thread errors so no popup after intentional disconnect
         while not self.message_queue.empty():
             try:
                 self.message_queue.get_nowait()
@@ -544,7 +627,7 @@ class CANViewer:
 
         self.btn_connect.config(state=tk.NORMAL)
         self.btn_disconnect.config(state=tk.DISABLED)
-        self.btn_send.config(state=tk.DISABLED)
+        self._set_send_buttons_state(tk.DISABLED)
         self.status_var.set("Disconnected")
         self.status_lbl.config(foreground="red")
         self.bar_var.set("Disconnected")
@@ -557,6 +640,7 @@ class CANViewer:
         self.error_count = 0
         self.count_var.set("Messages: 0")
         self.error_var.set("Errors: 0")
+        self._trace_start = None
 
     def _on_close(self):
         self._disconnect()
@@ -594,12 +678,16 @@ class CANViewer:
         self.root.after(10, self._poll_queue)
 
     def _show_message(self, msg: can.Message):
+        now = time.time()
+        if self._trace_start is None:
+            self._trace_start = now
+        rel = f"{now - self._trace_start:.3f}"
         ts = datetime.now().strftime("%H:%M:%S.%f")[:-3]
 
         if msg.is_error_frame:
             data = " ".join(f"{b:02X}" for b in msg.data) if msg.data else ""
             self.tree.insert("", tk.END,
-                             values=(ts, "---", "ERR", "---", data),
+                             values=(ts, rel, "---", "ERR", "---", data),
                              tags=("error",))
             self.tree.tag_configure("error", foreground="red")
             self.error_count += 1
@@ -609,10 +697,10 @@ class CANViewer:
                      else f"0x{msg.arbitration_id:03X}")
             frame = "EXT" if msg.is_extended_id else "STD"
             data  = " ".join(f"{b:02X}" for b in msg.data)
-            self.tree.insert("", tk.END, values=(ts, arb, frame, msg.dlc, data))
+            self.tree.insert("", tk.END, values=(ts, rel, arb, frame, msg.dlc, data))
             self.message_count += 1
             self.count_var.set(f"Messages: {self.message_count}")
-            self._decode_and_display(msg, ts)
+            self._decode_and_display(msg, ts, rel)
 
         if self.log_writer is not None:
             try:

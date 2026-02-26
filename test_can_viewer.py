@@ -154,21 +154,21 @@ class TestShowMessage(unittest.TestCase):
         children = self.app.tree.get_children()
         self.assertEqual(len(children), 1)
         vals = self.app.tree.item(children[0])["values"]
-        self.assertEqual(vals[1], "0x123")
-        self.assertEqual(vals[2], "STD")
-        self.assertEqual(vals[3], 2)
-        self.assertEqual(vals[4], "AB CD")
+        self.assertEqual(vals[2], "0x123")
+        self.assertEqual(vals[3], "STD")
+        self.assertEqual(vals[4], 2)
+        self.assertEqual(vals[5], "AB CD")
 
     def test_extended_id_format(self):
         self.app._show_message(_normal_msg(arb_id=0x1FFFFFFF, data=[], extended=True))
         vals = self.app.tree.item(self.app.tree.get_children()[0])["values"]
-        self.assertEqual(vals[1], "0x1FFFFFFF")
-        self.assertEqual(vals[2], "EXT")
+        self.assertEqual(vals[2], "0x1FFFFFFF")
+        self.assertEqual(vals[3], "EXT")
 
     def test_standard_id_format(self):
         self.app._show_message(_normal_msg(arb_id=0x7FF, data=[], extended=False))
         vals = self.app.tree.item(self.app.tree.get_children()[0])["values"]
-        self.assertEqual(vals[1], "0x7FF")
+        self.assertEqual(vals[2], "0x7FF")
 
     def test_error_frame_increments_error_count(self):
         self.app._show_message(_error_msg())
@@ -178,8 +178,8 @@ class TestShowMessage(unittest.TestCase):
     def test_error_frame_shows_ERR_in_raw_tree(self):
         self.app._show_message(_error_msg())
         vals = self.app.tree.item(self.app.tree.get_children()[0])["values"]
-        self.assertEqual(vals[1], "---")
-        self.assertEqual(vals[2], "ERR")
+        self.assertEqual(vals[2], "---")
+        self.assertEqual(vals[3], "ERR")
 
     def test_multiple_messages_accumulate(self):
         for i in range(5):
