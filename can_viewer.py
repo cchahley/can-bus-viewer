@@ -1,5 +1,5 @@
 """
-CAN Bus Viewer - Supports PEAK (PCAN) and Vector interfaces
+CAN Bus Viewer - Supports PEAK (PCAN), Vector, and Virtual interfaces
 Requires: pip install python-can cantools
 """
 import contextlib
@@ -38,8 +38,8 @@ class CANViewer:
     def __init__(self, root):
         self.root = root
         self.root.title("CAN Bus Viewer")
-        self.root.geometry("1400x700")
-        self.root.minsize(900, 450)
+        self.root.geometry("1400x820")
+        self.root.minsize(900, 550)
 
         self.bus = None
         self.running = False
@@ -61,6 +61,13 @@ class CANViewer:
     # ------------------------------------------------------------------ UI --
 
     def _build_ui(self):
+        # Status bar is packed first (side=BOTTOM) so the expanding pane
+        # and send panel don't squeeze it out.
+        self.bar_var = tk.StringVar(value="Ready")
+        ttk.Label(self.root, textvariable=self.bar_var,
+                  relief=tk.SUNKEN, anchor=tk.W).pack(
+            fill=tk.X, side=tk.BOTTOM, padx=10, pady=(0, 4))
+
         # --- Connection bar ---
         conn = ttk.LabelFrame(self.root, text="Connection", padding=8)
         conn.pack(fill=tk.X, padx=10, pady=(8, 2))
@@ -68,7 +75,8 @@ class CANViewer:
         ttk.Label(conn, text="Interface:").grid(row=0, column=0, sticky=tk.W, padx=4)
         self.iface_var = tk.StringVar(value="pcan")
         iface_cb = ttk.Combobox(conn, textvariable=self.iface_var,
-                                 values=["pcan", "vector"], width=8, state="readonly")
+                                 values=["pcan", "vector", "virtual"],
+                                 width=8, state="readonly")
         iface_cb.grid(row=0, column=1, padx=4)
         iface_cb.bind("<<ComboboxSelected>>", self._on_iface_change)
 
@@ -183,16 +191,89 @@ class CANViewer:
         sym_frame.rowconfigure(0, weight=1)
         sym_frame.columnconfigure(0, weight=1)
 
-        # --- Status bar ---
-        self.bar_var = tk.StringVar(value="Ready")
-        ttk.Label(self.root, textvariable=self.bar_var,
-                  relief=tk.SUNKEN, anchor=tk.W).pack(
-            fill=tk.X, side=tk.BOTTOM, padx=10, pady=(0, 4))
+        # --- Send panel ---
+        self._build_send_panel()
+
+    def _build_send_panel(self):
+        sf = ttk.LabelFrame(self.root, text="Send CAN Message", padding=6)
+        sf.pack(fill=tk.X, padx=10, pady=(0, 4))
+
+        row = ttk.Frame(sf)
+        row.pack(fill=tk.X)
+
+        # Mode selection
+        self.send_mode_var = tk.StringVar(value="raw")
+        ttk.Radiobutton(row, text="Raw", variable=self.send_mode_var,
+                        value="raw", command=self._on_send_mode_change).pack(
+            side=tk.LEFT, padx=(0, 2))
+        ttk.Radiobutton(row, text="DBC Signal", variable=self.send_mode_var,
+                        value="dbc", command=self._on_send_mode_change).pack(
+            side=tk.LEFT, padx=(0, 6))
+        ttk.Separator(row, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, pady=2, padx=6)
+
+        # --- Raw sub-frame ---
+        self._raw_send_frame = ttk.Frame(row)
+        self._raw_send_frame.pack(side=tk.LEFT)
+
+        ttk.Label(self._raw_send_frame, text="ID (hex):").pack(side=tk.LEFT, padx=(4, 2))
+        self.send_id_var = tk.StringVar(value="100")
+        ttk.Entry(self._raw_send_frame, textvariable=self.send_id_var,
+                  width=8).pack(side=tk.LEFT, padx=2)
+
+        self.send_ext_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(self._raw_send_frame, text="Ext",
+                        variable=self.send_ext_var).pack(side=tk.LEFT, padx=4)
+
+        ttk.Label(self._raw_send_frame, text="Data (hex):").pack(side=tk.LEFT, padx=(8, 2))
+        self.send_data_var = tk.StringVar(value="")
+        ttk.Entry(self._raw_send_frame, textvariable=self.send_data_var,
+                  width=34).pack(side=tk.LEFT, padx=2)
+
+        # --- DBC sub-frame (initially hidden) ---
+        self._dbc_send_frame = ttk.Frame(row)
+
+        ttk.Label(self._dbc_send_frame, text="Message:").pack(side=tk.LEFT, padx=(4, 2))
+        self.send_msg_var = tk.StringVar()
+        self.send_msg_cb = ttk.Combobox(self._dbc_send_frame,
+                                         textvariable=self.send_msg_var,
+                                         width=20, state="readonly")
+        self.send_msg_cb.pack(side=tk.LEFT, padx=2)
+        self.send_msg_cb.bind("<<ComboboxSelected>>", self._on_send_msg_change)
+
+        ttk.Label(self._dbc_send_frame, text="Signal:").pack(side=tk.LEFT, padx=(8, 2))
+        self.send_sig_var = tk.StringVar()
+        self.send_sig_cb = ttk.Combobox(self._dbc_send_frame,
+                                         textvariable=self.send_sig_var,
+                                         width=20, state="readonly")
+        self.send_sig_cb.pack(side=tk.LEFT, padx=2)
+        self.send_sig_cb.bind("<<ComboboxSelected>>", self._on_send_sig_change)
+
+        ttk.Label(self._dbc_send_frame, text="Value:").pack(side=tk.LEFT, padx=(8, 2))
+        self.send_val_var = tk.StringVar(value="0")
+        ttk.Entry(self._dbc_send_frame, textvariable=self.send_val_var,
+                  width=10).pack(side=tk.LEFT, padx=2)
+
+        self.send_unit_var = tk.StringVar(value="")
+        ttk.Label(self._dbc_send_frame, textvariable=self.send_unit_var,
+                  width=6, foreground="gray").pack(side=tk.LEFT, padx=2)
+
+        # Send button (always visible, right side)
+        self.btn_send = ttk.Button(row, text="Send",
+                                    command=self._send_message, state=tk.DISABLED)
+        self.btn_send.pack(side=tk.RIGHT, padx=8)
 
     # --------------------------------------------------------- device scan --
 
     def _scan_channels(self):
         iface = self.iface_var.get()
+
+        if iface == "virtual":
+            self.channel_cb["values"] = ["0"]
+            self.channel_var.set("0")
+            self.btn_connect.config(state=tk.NORMAL)
+            self.bar_var.set("Virtual CAN — no hardware required, loopback enabled")
+            return
+
         try:
             with _silence_stderr():
                 configs = can.detect_available_configs(interfaces=[iface])
@@ -238,9 +319,17 @@ class CANViewer:
             return
         self.dbc_var.set(
             f"DBC: {os.path.basename(filename)}  ({len(self.db.messages)} msgs)")
+
         # Clear symbolic view — signals from the old DBC are stale
         self.sym_tree.delete(*self.sym_tree.get_children())
         self._signal_iids.clear()
+
+        # Populate send panel message dropdown
+        msg_names = sorted(m.name for m in self.db.messages)
+        self.send_msg_cb["values"] = msg_names
+        if msg_names:
+            self.send_msg_var.set(msg_names[0])
+            self._on_send_msg_change()
 
     def _decode_and_display(self, msg: can.Message, ts: str):
         """Decode msg signals via DBC and update the symbolic live view."""
@@ -266,6 +355,83 @@ class CANViewer:
                 iid = self.sym_tree.insert(
                     "", tk.END, values=(db_msg.name, sig_name, val_str, unit, ts))
                 self._signal_iids[key] = iid
+
+    # ---------------------------------------------------------- send panel --
+
+    def _on_send_mode_change(self):
+        if self.send_mode_var.get() == "raw":
+            self._dbc_send_frame.pack_forget()
+            self._raw_send_frame.pack(side=tk.LEFT)
+        else:
+            self._raw_send_frame.pack_forget()
+            self._dbc_send_frame.pack(side=tk.LEFT)
+
+    def _on_send_msg_change(self, _=None):
+        if self.db is None:
+            return
+        try:
+            db_msg = self.db.get_message_by_name(self.send_msg_var.get())
+            signals = sorted(s.name for s in db_msg.signals)
+            self.send_sig_cb["values"] = signals
+            if signals:
+                self.send_sig_var.set(signals[0])
+                self._update_send_unit()
+        except Exception:
+            pass
+
+    def _on_send_sig_change(self, _=None):
+        self._update_send_unit()
+
+    def _update_send_unit(self):
+        if self.db is None:
+            self.send_unit_var.set("")
+            return
+        try:
+            db_msg = self.db.get_message_by_name(self.send_msg_var.get())
+            sig = db_msg.get_signal_by_name(self.send_sig_var.get())
+            self.send_unit_var.set(sig.unit or "")
+        except Exception:
+            self.send_unit_var.set("")
+
+    def _send_message(self):
+        if self.bus is None:
+            return
+        if self.send_mode_var.get() == "raw":
+            self._send_raw()
+        else:
+            self._send_dbc()
+
+    def _send_raw(self):
+        try:
+            arb_id = int(self.send_id_var.get().strip(), 16)
+            data_str = self.send_data_var.get().strip()
+            data = bytes(int(b, 16) for b in data_str.split()) if data_str else b""
+            msg = can.Message(
+                arbitration_id=arb_id,
+                data=data,
+                is_extended_id=self.send_ext_var.get(),
+            )
+            self.bus.send(msg)
+        except Exception as exc:
+            messagebox.showerror("Send Error", str(exc))
+
+    def _send_dbc(self):
+        if self.db is None:
+            messagebox.showerror("No DBC", "Load a DBC file first.")
+            return
+        try:
+            db_msg = self.db.get_message_by_name(self.send_msg_var.get())
+            sig_name = self.send_sig_var.get()
+            value = float(self.send_val_var.get())
+            data = db_msg.encode({sig_name: value}, padding=True)
+            msg = can.Message(
+                arbitration_id=db_msg.frame_id,
+                data=data,
+                is_extended_id=db_msg.is_extended_frame,
+            )
+            self.bus.send(msg)
+        except Exception as exc:
+            messagebox.showerror("Send Error", str(exc))
 
     # --------------------------------------------------------------- logging --
 
@@ -328,11 +494,18 @@ class CANViewer:
                 return
 
         try:
-            self.bus = can.interface.Bus(
-                interface=iface,
-                channel=channel,
-                bitrate=bitrate,
-            )
+            if iface == "virtual":
+                self.bus = can.interface.Bus(
+                    interface="virtual",
+                    channel=channel,
+                    receive_own_messages=True,
+                )
+            else:
+                self.bus = can.interface.Bus(
+                    interface=iface,
+                    channel=channel,
+                    bitrate=bitrate,
+                )
         except Exception as exc:
             messagebox.showerror("Connection Error", str(exc))
             self.bar_var.set(f"Error: {exc}")
@@ -343,10 +516,11 @@ class CANViewer:
 
         self.btn_connect.config(state=tk.DISABLED)
         self.btn_disconnect.config(state=tk.NORMAL)
+        self.btn_send.config(state=tk.NORMAL)
         self.status_var.set("Connected")
         self.status_lbl.config(foreground="green")
-        self.bar_var.set(
-            f"Connected  |  {iface.upper()}  channel={channel}  bitrate={bitrate} bps")
+        label = "Virtual (loopback)" if iface == "virtual" else f"{iface.upper()}  channel={channel}  bitrate={bitrate} bps"
+        self.bar_var.set(f"Connected  |  {label}")
 
     def _disconnect(self):
         self.running = False
@@ -370,6 +544,7 @@ class CANViewer:
 
         self.btn_connect.config(state=tk.NORMAL)
         self.btn_disconnect.config(state=tk.DISABLED)
+        self.btn_send.config(state=tk.DISABLED)
         self.status_var.set("Disconnected")
         self.status_lbl.config(foreground="red")
         self.bar_var.set("Disconnected")
