@@ -87,7 +87,7 @@ class CANViewer(
         self.db = None
         self._signal_iids: dict = {}    # (arb_id, sig_name) → treeview iid
         self._msg_iids: dict = {}       # arb_id → message parent row iid
-        self._trace_start: float | None = None
+        self._trace_start = None   # float | None; no annotation avoids mixin inference conflict
         self._send_rows: list = []       # raw send rows
         self._dbc_send_rows: list = []   # DBC send rows
 

@@ -268,9 +268,10 @@ class SendMixin:
                     "_max":     sig_max,
                 }
                 # Clamp on FocusOut and Return
-                clamp_fn = lambda _, rd=row_data, sn=sig.name: self._clamp_signal_entry(rd, sn)
-                entry.bind("<FocusOut>", clamp_fn)
-                entry.bind("<Return>",   clamp_fn)
+                def _clamp_fn(_, rd=row_data, sn=sig.name):
+                    self._clamp_signal_entry(rd, sn)
+                entry.bind("<FocusOut>", _clamp_fn)
+                entry.bind("<Return>",   _clamp_fn)
 
         self._dbc_rows_frame.update_idletasks()
         self._dbc_canvas.configure(scrollregion=self._dbc_canvas.bbox("all"))

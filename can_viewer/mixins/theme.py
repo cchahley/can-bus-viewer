@@ -8,7 +8,6 @@ original platform theme when switching back to light mode.
 The "changed" highlight tag and the "error" tag colours are also updated so
 they remain visible against both backgrounds.
 """
-import tkinter as tk
 from tkinter import ttk
 
 

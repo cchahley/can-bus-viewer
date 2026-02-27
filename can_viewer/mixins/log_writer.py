@@ -12,7 +12,6 @@ The actual per-message write happens in ``MessageDisplayMixin._show_message`` wh
 has access to each message as it arrives.
 """
 import csv
-import tkinter as tk
 from tkinter import filedialog, messagebox
 
 import can

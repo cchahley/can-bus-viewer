@@ -23,7 +23,6 @@ import os
 import subprocess
 import sys
 import time
-import tkinter as tk
 from tkinter import messagebox
 
 # Resolve the project root at import time.

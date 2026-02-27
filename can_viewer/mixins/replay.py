@@ -102,7 +102,7 @@ class ReplayMixin:
                         if not row or row[0].startswith("Timestamp"):
                             continue
                         try:
-                            ts_str, arb_str, frame, dlc_str, data_str = \
+                            _, arb_str, frame, _, data_str = \
                                 row[0], row[1], row[2], row[3], row[4]
                             if arb_str in ("---", ""):
                                 continue
