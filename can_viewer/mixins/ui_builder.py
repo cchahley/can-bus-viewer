@@ -105,6 +105,12 @@ class UIBuilderMixin:
                    command=self._open_plot_window).pack(side=tk.LEFT, padx=4)
         ttk.Button(toolbar, text="Import Trace",
                    command=self._open_replay_window).pack(side=tk.LEFT, padx=4)
+        ttk.Button(toolbar, text="Diag Log",
+                   command=self._diag_open_log).pack(side=tk.LEFT, padx=4)
+
+        # Drop-count label — non-empty only when messages have been lost.
+        ttk.Label(toolbar, textvariable=self._drop_var,
+                  foreground="orange").pack(side=tk.RIGHT, padx=6)
 
         self.error_var = tk.StringVar(value="Errors: 0")
         ttk.Label(toolbar, textvariable=self.error_var,

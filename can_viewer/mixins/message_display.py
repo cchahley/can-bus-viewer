@@ -94,7 +94,12 @@ class MessageDisplayMixin:
             return
         try:
             signals = db_msg.decode(msg.data, decode_choices=True)
-        except Exception:
+        except Exception as exc:
+            self._diag_log(
+                f"Decode error  arb=0x{msg.arbitration_id:X}  dlc={msg.dlc}"
+                f"  data={msg.data.hex()}  err={exc}",
+                "debug",
+            )
             return
 
         arb_id = msg.arbitration_id
@@ -148,11 +153,14 @@ class MessageDisplayMixin:
                 iid = self._signal_iids[key]
                 self.sym_tree.item(iid, values=row_vals)
                 # ── Row highlight on change ───────────────────────────────────
+                # Only schedule a new timer when no timer is already pending for
+                # this iid.  Previously the code cancelled and rescheduled on
+                # *every* value change, which at high message rates created
+                # thousands of after_cancel/after pairs per second and caused
+                # progressive GUI slowdown.
                 if (self._highlight_var.get()
-                        and self._prev_sig_values.get(key) != val_str):
-                    existing = self._highlight_after_ids.get(iid)
-                    if existing:
-                        self.root.after_cancel(existing)
+                        and self._prev_sig_values.get(key) != val_str
+                        and iid not in self._highlight_after_ids):
                     self.sym_tree.item(iid, tags=("changed",))
                     self._highlight_after_ids[iid] = self.root.after(
                         2000, self._remove_highlight, iid)

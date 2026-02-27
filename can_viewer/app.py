@@ -32,6 +32,7 @@ from .mixins.filtering       import FilterMixin
 from .mixins.theme           import ThemeMixin
 from .mixins.plot            import PlotMixin
 from .mixins.replay          import ReplayMixin
+from .mixins.diag            import DiagMixin
 
 
 class CANViewer(
@@ -45,6 +46,7 @@ class CANViewer(
     ThemeMixin,
     PlotMixin,
     ReplayMixin,
+    DiagMixin,
 ):
     """CAN Bus Viewer — main application class.
 
@@ -74,6 +76,7 @@ class CANViewer(
         self.message_queue: queue.Queue = queue.Queue(maxsize=10_000)
         self.message_count: int = 0
         self.error_count: int = 0
+        self._dropped_count: int = 0   # messages silently dropped (queue full)
 
         # ── Logging state ─────────────────────────────────────────────────────
         self.log_writer = None
@@ -101,9 +104,11 @@ class CANViewer(
         # ── Raw message buffer and filter ─────────────────────────────────────
         self._filter_var = tk.StringVar()
         self._raw_buffer: collections.deque = collections.deque(maxlen=5000)
-        self._raw_tree_count: int = 0     # rows currently in self.tree
-        self._filter_tokens: list = []    # cached tokens — updated only on filter change
-        self._msg_name_cache: dict = {}   # frame_id → msg name (built on DBC load)
+        self._raw_tree_count: int = 0        # rows currently in self.tree
+        self._raw_iid_deque: collections.deque = collections.deque()  # O(1) eviction
+        self._filter_tokens: list = []       # cached tokens — updated only on filter change
+        self._msg_name_cache: dict = {}      # frame_id → msg name (built on DBC load)
+        self._drop_var = tk.StringVar(value="")   # toolbar label, set by stats timer
 
         # ── Trace replay ──────────────────────────────────────────────────────
         self._replay_messages: list = []
@@ -115,6 +120,7 @@ class CANViewer(
 
         # ── Start up ──────────────────────────────────────────────────────────
         self._build_ui()
+        self._setup_diag()       # rotating log file; must come after _build_ui
         self._scan_channels()
         self._poll_queue()
         self._update_stats_labels()

@@ -45,6 +45,7 @@ class FilterMixin:
 
         # ── Raw tree rebuild from buffer ──────────────────────────────────────
         self.tree.delete(*self.tree.get_children())
+        self._raw_iid_deque.clear()          # keep deque in sync after bulk delete
         self._raw_tree_count = 0
         for item in self._raw_buffer:
             ts, rel, arb, frame, dlc, data, is_error = item

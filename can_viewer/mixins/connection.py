@@ -128,9 +128,14 @@ class ConnectionMixin:
         label = ("Virtual (loopback)" if iface == "virtual"
                  else f"{iface.upper()}  channel={channel}  bitrate={bitrate} bps")
         self.bar_var.set(f"Connected  |  {label}")
+        self._diag_log(f"Connect: iface={iface} channel={channel} bitrate={bitrate}")
 
     def _disconnect(self):
         """Stop reading, cancel all periodic sends, close the bus, and stop logging."""
+        self._diag_log(
+            f"Disconnect: messages={self.message_count} "
+            f"errors={self.error_count} dropped={self._dropped_count}"
+        )
         self._cancel_all_periodic()
         self.running = False
         if self.bus:
@@ -161,13 +166,16 @@ class ConnectionMixin:
     def _clear(self):
         """Reset all live data: trees, counters, signal stats, and plot buffers."""
         self.tree.delete(*self.tree.get_children())
+        self._raw_iid_deque.clear()          # keep in sync with the cleared tree
         self.sym_tree.delete(*self.sym_tree.get_children())
         self._signal_iids.clear()
         self._msg_iids.clear()
         self.message_count = 0
         self.error_count = 0
+        self._dropped_count = 0
         self.count_var.set("Messages: 0")
         self.error_var.set("Errors: 0")
+        self._drop_var.set("")
         self._trace_start = None
         self._signal_stats.clear()
         self._prev_sig_values.clear()
