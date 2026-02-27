@@ -25,13 +25,13 @@ jobs:
         run: pip install python-can cantools ruff mypy pytest
 
       - name: Syntax check
-        run: python -m py_compile can_viewer.py
+        run: python -m py_compile can_viewer.py && python -c "import can_viewer"
 
       - name: Lint (ruff)
-        run: ruff check can_viewer.py
+        run: ruff check can_viewer/ can_viewer.py
 
       - name: Type check (mypy)
-        run: mypy can_viewer.py --ignore-missing-imports
+        run: mypy can_viewer/ --ignore-missing-imports
 
       - name: Unit tests
         run: xvfb-run python -m pytest test_can_viewer.py -v
