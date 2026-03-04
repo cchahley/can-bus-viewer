@@ -10,7 +10,7 @@ from dataclasses import dataclass
 
 import can
 
-from can_viewer.utils import _silence_stderr
+from .utils import silence_stderr
 
 try:
     import serial.tools.list_ports as serial_list_ports
@@ -66,7 +66,7 @@ class QtCanBackend:
             )
 
         try:
-            with _silence_stderr():
+            with silence_stderr():
                 configs = can.detect_available_configs(interfaces=[iface])
             channels = [str(c["channel"]) for c in configs]
         except Exception:
@@ -78,6 +78,21 @@ class QtCanBackend:
                 default_channel=channels[0],
                 can_connect=True,
                 status=f"Found {len(channels)} {iface.upper()} device(s) - ready to connect",
+            )
+
+        if iface == "pcan":
+            return ScanResult(
+                channels=["PCAN_USBBUS1", "PCAN_USBBUS2"],
+                default_channel="PCAN_USBBUS1",
+                can_connect=True,
+                status="PCAN auto-detect returned none. Select/type a channel and try Connect.",
+            )
+        if iface == "vector":
+            return ScanResult(
+                channels=["0", "1"],
+                default_channel="0",
+                can_connect=True,
+                status="Vector auto-detect returned none. Select/type a channel and try Connect.",
             )
 
         return ScanResult(
@@ -183,7 +198,7 @@ class QtCanBackend:
     def _shutdown_bus(bus: can.BusABC) -> None:
         """Shutdown bus in background to avoid blocking the UI thread."""
         try:
-            with _silence_stderr():
+            with silence_stderr():
                 bus.shutdown()
         except Exception:
             pass

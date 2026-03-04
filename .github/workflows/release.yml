@@ -1,0 +1,31 @@
+name: Release Build
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install python-can cantools pyserial pyside6 pyinstaller
+
+      - name: Build Qt executable
+        run: pyinstaller can_viewer.spec
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: can_viewer_qt-windows
+          path: dist/can_viewer_qt/**

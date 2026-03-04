@@ -18,22 +18,22 @@ jobs:
         with:
           python-version: "3.14"
 
-      - name: Install system dependencies (tkinter + virtual display)
-        run: sudo apt-get install -y python3-tk xvfb
+      - name: Install system dependencies
+        run: sudo apt-get install -y xvfb
 
       - name: Install Python dependencies
-        run: pip install python-can cantools ruff mypy pytest
+        run: pip install python-can cantools pyside6 matplotlib ruff mypy pytest
 
       - name: Syntax check
-        run: python -m py_compile can_viewer.py && python -c "import can_viewer"
+        run: python -m py_compile can_viewer.py can_viewer_qt.py can_viewer_qt/*.py && python -c "import can_viewer_qt"
 
       - name: Lint (ruff)
-        run: ruff check can_viewer/ can_viewer.py
+        run: ruff check can_viewer_qt/ can_viewer.py can_viewer_qt.py
 
       - name: Type check (mypy)
-        # attr-defined is suppressed because mypy checks each mixin in isolation
-        # and cannot see cross-mixin attributes that are resolved at runtime via MRO.
-        run: mypy can_viewer/ --ignore-missing-imports --disable-error-code attr-defined --disable-error-code has-type
+        run: mypy can_viewer_qt/ --ignore-missing-imports
 
       - name: Unit tests
-        run: xvfb-run python -m pytest test_can_viewer.py -v
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: xvfb-run python -m pytest test_can_viewer_qt.py -v

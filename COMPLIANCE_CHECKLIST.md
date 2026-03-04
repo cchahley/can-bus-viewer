@@ -63,3 +63,5 @@ Use this checklist before each release of CAN Bus Viewer.
 - Engineering approver:
 - Legal/compliance approver:
 - Notes/exceptions:
+
+Current planned release version: `0.1.0`

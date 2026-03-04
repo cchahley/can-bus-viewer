@@ -76,6 +76,22 @@ QComboBox QAbstractItemView::item:disabled {
     background: #f2f5fa;
 }
 
+QLineEdit {
+    border: 1px solid #b8c5d7;
+    border-radius: 6px;
+    padding: 5px 8px;
+    background: #ffffff;
+    color: #17202a;
+    selection-background-color: #d9e8fb;
+    selection-color: #10233b;
+}
+
+QLineEdit:disabled {
+    background: #eef2f8;
+    color: #6d7e91;
+    border-color: #d4dce8;
+}
+
 QTableWidget,
 QTableView,
 QTreeWidget {
@@ -140,5 +156,16 @@ QPushButton#primaryButton:hover {
 QStatusBar {
     background: #e9eef5;
     border-top: 1px solid #c8d0dc;
+}
+
+QDialog,
+QMessageBox {
+    background: #ffffff;
+    color: #17202a;
+}
+
+QMessageBox QLabel {
+    color: #17202a;
+    background: #ffffff;
 }
 """
