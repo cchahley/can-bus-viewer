@@ -44,6 +44,10 @@ pip install python-can cantools matplotlib
 
 # Run
 python can_viewer.py
+
+# Qt migration preview (Phase 6 monitor + send + replay/logging + plot + diagnostics preview)
+pip install pyside6
+python can_viewer_qt.py
 ```
 
 ---
@@ -120,7 +124,9 @@ pyinstaller can_viewer.spec
 
 ```bash
 pip install pytest ruff mypy
-python -m pytest test_can_viewer.py -v    # 37 unit tests
+python -m pytest -q                        # tkinter + Qt tests (41 total)
+python -m pytest test_can_viewer.py -v     # tkinter test suite
+python -m pytest test_can_viewer_qt.py -v  # Qt preview tests (virtual CAN + DBC)
 ruff check can_viewer/ can_viewer.py
 mypy can_viewer/ --ignore-missing-imports
 ```
@@ -133,3 +139,4 @@ mypy can_viewer/ --ignore-missing-imports
 2. Make changes in the appropriate mixin module under `can_viewer/mixins/`.
 3. Run tests and lint before opening a PR.
 4. See [ARCHITECTURE.md](ARCHITECTURE.md) for a module map and design notes.
+

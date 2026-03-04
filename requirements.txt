@@ -1,4 +1,4 @@
-# CAN Bus Viewer — runtime dependencies
+# CAN Bus Viewer - runtime dependencies
 # Install with:  pip install -r requirements.txt
 
 # Core CAN bus library (PCAN, Vector, SLCAN/CANable, virtual, BLF logging)
@@ -7,10 +7,13 @@ python-can>=4.0
 # DBC decoding and DBC-driven send panel
 cantools>=39.0
 
-# Optional — signal plot window (app runs without it, plot button hidden)
+# Optional - signal plot window (app runs without it, plot button hidden)
 matplotlib>=3.7
 
-# Optional — CANable / SLCAN serial-port enumeration
+# Optional - Qt migration preview UI (Phase 1 shell)
+# pyside6>=6.6
+
+# Optional - CANable / SLCAN serial-port enumeration
 # pip install pyserial
 # pyserial>=3.5
 
