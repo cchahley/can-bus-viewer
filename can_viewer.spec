@@ -6,6 +6,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs
 
 project_root = Path(SPECPATH)
 
@@ -36,10 +37,20 @@ datas = []
 if icon_path:
     datas.append((icon_path, "."))
 
+# Include runtime data (Qt plugins/translations and package data) needed by the
+# frozen app to start without missing-DLL/plugin errors on end-user machines.
+datas += collect_data_files("PySide6")
+
+binaries = []
+# Pull package-shipped dynamic libraries so dependent native modules are present
+# in dist even when PyInstaller does not auto-discover them.
+for package_name in ("PySide6", "shiboken6", "can", "serial"):
+    binaries += collect_dynamic_libs(package_name)
+
 a = Analysis(
     ["can_viewer_qt.py"],
     pathex=[str(project_root)],
-    binaries=[],
+    binaries=binaries,
     datas=datas,
     hiddenimports=[
         "can.interfaces.pcan.pcan",
@@ -63,8 +74,10 @@ pyz = PYZ(a.pure)
 exe = EXE(
     pyz,
     a.scripts,
+    a.binaries,
+    a.datas,
     [],
-    exclude_binaries=True,
+    exclude_binaries=False,
     name="can_viewer_qt",
     debug=False,
     bootloader_ignore_signals=False,
@@ -77,14 +90,4 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
     icon=icon_path,
-)
-
-coll = COLLECT(
-    exe,
-    a.binaries,
-    a.datas,
-    strip=False,
-    upx=True,
-    upx_exclude=[],
-    name="can_viewer_qt",
 )

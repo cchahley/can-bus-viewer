@@ -53,7 +53,7 @@ pip install pyinstaller
 pyinstaller can_viewer.spec
 ```
 
-Output: `dist/can_viewer_qt/can_viewer_qt.exe`
+Output: `dist/can_viewer_qt.exe` (single-file build)
 
 `can_viewer.spec` includes CAN backend hidden imports (`pcan`, `vector`, `slcan`, `pyserial`) for improved dongle detection in packaged builds.
 
