@@ -37,3 +37,19 @@ Current release version: `0.1.0`
 
 - [can_viewer.spec](/c:/Softwaredevtest/codexfirstprog/can-bus-viewer/can_viewer.spec) builds Qt executable.
 - Hidden imports include CAN backends and PySide6 modules for packaged runtime detection.
+
+## C# WinUI 3 Migration (In Progress)
+
+- Solution: `CanBusViewer.sln`
+- App: `src/CanViewer.App`
+- Core: `src/CanViewer.Core`
+- Adapters: `src/CanViewer.Adapters`
+- Tests: `tests/CanViewer.Tests`
+
+Current implemented C# data path:
+
+1. Interface adapter (`ICanSessionService`) produces CAN frames.
+2. Main window view-model consumes async frame stream.
+3. Raw rows and decode rows update bounded collections.
+4. Trigger evaluator runs against incoming frames.
+5. Replay parser loads CSV replay entries for later playback integration.

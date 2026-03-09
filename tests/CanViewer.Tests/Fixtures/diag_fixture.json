@@ -1,0 +1,698 @@
+{
+  "source_file": "can_viewer_diag.log",
+  "summary": {
+    "start_count": 111,
+    "disconnect_count": 18,
+    "decode_error_count": 3
+  },
+  "starts": [
+    {
+      "timestamp": "2026-03-04 13:23:43",
+      "pid": 60788,
+      "python_version": "3.14.0"
+    },
+    {
+      "timestamp": "2026-03-04 13:23:44",
+      "pid": 60788,
+      "python_version": "3.14.0"
+    },
+    {
+      "timestamp": "2026-03-04 13:23:44",
+      "pid": 60788,
+      "python_version": "3.14.0"
+    },
+    {
+      "timestamp": "2026-03-04 13:23:44",
+      "pid": 60788,
+      "python_version": "3.14.0"
+    },
+    {
+      "timestamp": "2026-03-04 13:23:44",
+      "pid": 60788,
+      "python_version": "3.14.0"
+    },
+    {
+      "timestamp": "2026-03-04 13:23:44",
+      "pid": 60788,
+      "python_version": "3.14.0"
+    },
+    {
+      "timestamp": "2026-03-04 13:23:44",
+      "pid": 60788,
+      "python_version": "3.14.0"
+    },
+    {
+      "timestamp": "2026-03-04 13:23:44",
+      "pid": 60788,
+      "python_version": "3.14.0"
+    },
+    {
+      "timestamp": "2026-03-04 13:23:44",
+      "pid": 60788,
+      "python_version": "3.14.0"
+    },
+    {
+      "timestamp": "2026-03-04 13:23:44",
+      "pid": 60788,
+      "python_version": "3.14.0"
+    },
+    {
+      "timestamp": "2026-03-04 13:23:45",
+      "pid": 60788,
+      "python_version": "3.14.0"
+    },
+    {
+      "timestamp": "2026-03-04 13:23:45",
+      "pid": 60788,
+      "python_version": "3.14.0"
+    },
+    {
+      "timestamp": "2026-03-04 13:23:45",
+      "pid": 60788,
+      "python_version": "3.14.0"
+    },
+    {
+      "timestamp": "2026-03-04 13:23:45",
+      "pid": 60788,
+      "python_version": "3.14.0"
+    },
+    {
+      "timestamp": "2026-03-04 13:23:45",
+      "pid": 60788,
+      "python_version": "3.14.0"
+    },
+    {
+      "timestamp": "2026-03-04 13:23:45",
+      "pid": 60788,
+      "python_version": "3.14.0"
+    },
+    {
+      "timestamp": "2026-03-04 13:23:45",
+      "pid": 60788,
+      "python_version": "3.14.0"
+    },
+    {
+      "timestamp": "2026-03-04 13:23:45",
+      "pid": 60788,
+      "python_version": "3.14.0"
+    },
+    {
+      "timestamp": "2026-03-04 13:23:45",
+      "pid": 60788,
+      "python_version": "3.14.0"
+    },
+    {
+      "timestamp": "2026-03-04 13:23:46",
+      "pid": 60788,
+      "python_version": "3.14.0"
+    },
+    {
+      "timestamp": "2026-03-04 13:23:46",
+      "pid": 60788,
+      "python_version": "3.14.0"
+    },
+    {
+      "timestamp": "2026-03-04 13:23:46",
+      "pid": 60788,
+      "python_version": "3.14.0"
+    },
+    {
+      "timestamp": "2026-03-04 13:23:46",
+      "pid": 60788,
+      "python_version": "3.14.0"
+    },
+    {
+      "timestamp": "2026-03-04 13:23:46",
+      "pid": 60788,
+      "python_version": "3.14.0"
+    },
+    {
+      "timestamp": "2026-03-04 13:23:46",
+      "pid": 60788,
+      "python_version": "3.14.0"
+    },
+    {
+      "timestamp": "2026-03-04 13:23:46",
+      "pid": 60788,
+      "python_version": "3.14.0"
+    },
+    {
+      "timestamp": "2026-03-04 13:23:47",
+      "pid": 60788,
+      "python_version": "3.14.0"
+    },
+    {
+      "timestamp": "2026-03-04 13:23:47",
+      "pid": 60788,
+      "python_version": "3.14.0"
+    },
+    {
+      "timestamp": "2026-03-04 13:23:47",
+      "pid": 60788,
+      "python_version": "3.14.0"
+    },
+    {
+      "timestamp": "2026-03-04 13:23:47",
+      "pid": 60788,
+      "python_version": "3.14.0"
+    },
+    {
+      "timestamp": "2026-03-04 13:23:47",
+      "pid": 60788,
+      "python_version": "3.14.0"
+    },
+    {
+      "timestamp": "2026-03-04 13:23:47",
+      "pid": 60788,
+      "python_version": "3.14.0"
+    },
+    {
+      "timestamp": "2026-03-04 13:23:47",
+      "pid": 60788,
+      "python_version": "3.14.0"
+    },
+    {
+      "timestamp": "2026-03-04 13:23:47",
+      "pid": 60788,
+      "python_version": "3.14.0"
+    },
+    {
+      "timestamp": "2026-03-04 13:23:47",
+      "pid": 60788,
+      "python_version": "3.14.0"
+    },
+    {
+      "timestamp": "2026-03-04 13:23:48",
+      "pid": 60788,
+      "python_version": "3.14.0"
+    },
+    {
+      "timestamp": "2026-03-04 13:23:48",
+      "pid": 60788,
+      "python_version": "3.14.0"
+    },
+    {
+      "timestamp": "2026-03-04 13:25:04",
+      "pid": 11016,
+      "python_version": "3.14.0"
+    },
+    {
+      "timestamp": "2026-03-04 13:25:04",
+      "pid": 11016,
+      "python_version": "3.14.0"
+    },
+    {
+      "timestamp": "2026-03-04 13:25:04",
+      "pid": 11016,
+      "python_version": "3.14.0"
+    },
+    {
+      "timestamp": "2026-03-04 13:25:04",
+      "pid": 11016,
+      "python_version": "3.14.0"
+    },
+    {
+      "timestamp": "2026-03-04 13:25:04",
+      "pid": 11016,
+      "python_version": "3.14.0"
+    },
+    {
+      "timestamp": "2026-03-04 13:25:04",
+      "pid": 11016,
+      "python_version": "3.14.0"
+    },
+    {
+      "timestamp": "2026-03-04 13:25:04",
+      "pid": 11016,
+      "python_version": "3.14.0"
+    },
+    {
+      "timestamp": "2026-03-04 13:25:05",
+      "pid": 11016,
+      "python_version": "3.14.0"
+    },
+    {
+      "timestamp": "2026-03-04 13:25:05",
+      "pid": 11016,
+      "python_version": "3.14.0"
+    },
+    {
+      "timestamp": "2026-03-04 13:25:05",
+      "pid": 11016,
+      "python_version": "3.14.0"
+    },
+    {
+      "timestamp": "2026-03-04 13:25:05",
+      "pid": 11016,
+      "python_version": "3.14.0"
+    },
+    {
+      "timestamp": "2026-03-04 13:25:05",
+      "pid": 11016,
+      "python_version": "3.14.0"
+    },
+    {
+      "timestamp": "2026-03-04 13:25:05",
+      "pid": 11016,
+      "python_version": "3.14.0"
+    },
+    {
+      "timestamp": "2026-03-04 13:25:05",
+      "pid": 11016,
+      "python_version": "3.14.0"
+    },
+    {
+      "timestamp": "2026-03-04 13:25:05",
+      "pid": 11016,
+      "python_version": "3.14.0"
+    },
+    {
+      "timestamp": "2026-03-04 13:25:05",
+      "pid": 11016,
+      "python_version": "3.14.0"
+    },
+    {
+      "timestamp": "2026-03-04 13:25:06",
+      "pid": 11016,
+      "python_version": "3.14.0"
+    },
+    {
+      "timestamp": "2026-03-04 13:25:06",
+      "pid": 11016,
+      "python_version": "3.14.0"
+    },
+    {
+      "timestamp": "2026-03-04 13:25:06",
+      "pid": 11016,
+      "python_version": "3.14.0"
+    },
+    {
+      "timestamp": "2026-03-04 13:25:06",
+      "pid": 11016,
+      "python_version": "3.14.0"
+    },
+    {
+      "timestamp": "2026-03-04 13:25:06",
+      "pid": 11016,
+      "python_version": "3.14.0"
+    },
+    {
+      "timestamp": "2026-03-04 13:25:06",
+      "pid": 11016,
+      "python_version": "3.14.0"
+    },
+    {
+      "timestamp": "2026-03-04 13:25:06",
+      "pid": 11016,
+      "python_version": "3.14.0"
+    },
+    {
+      "timestamp": "2026-03-04 13:25:06",
+      "pid": 11016,
+      "python_version": "3.14.0"
+    },
+    {
+      "timestamp": "2026-03-04 13:25:06",
+      "pid": 11016,
+      "python_version": "3.14.0"
+    },
+    {
+      "timestamp": "2026-03-04 13:25:07",
+      "pid": 11016,
+      "python_version": "3.14.0"
+    },
+    {
+      "timestamp": "2026-03-04 13:25:07",
+      "pid": 11016,
+      "python_version": "3.14.0"
+    },
+    {
+      "timestamp": "2026-03-04 13:25:07",
+      "pid": 11016,
+      "python_version": "3.14.0"
+    },
+    {
+      "timestamp": "2026-03-04 13:25:07",
+      "pid": 11016,
+      "python_version": "3.14.0"
+    },
+    {
+      "timestamp": "2026-03-04 13:25:07",
+      "pid": 11016,
+      "python_version": "3.14.0"
+    },
+    {
+      "timestamp": "2026-03-04 13:25:07",
+      "pid": 11016,
+      "python_version": "3.14.0"
+    },
+    {
+      "timestamp": "2026-03-04 13:25:07",
+      "pid": 11016,
+      "python_version": "3.14.0"
+    },
+    {
+      "timestamp": "2026-03-04 13:25:07",
+      "pid": 11016,
+      "python_version": "3.14.0"
+    },
+    {
+      "timestamp": "2026-03-04 13:25:07",
+      "pid": 11016,
+      "python_version": "3.14.0"
+    },
+    {
+      "timestamp": "2026-03-04 13:25:08",
+      "pid": 11016,
+      "python_version": "3.14.0"
+    },
+    {
+      "timestamp": "2026-03-04 13:25:08",
+      "pid": 11016,
+      "python_version": "3.14.0"
+    },
+    {
+      "timestamp": "2026-03-04 13:25:08",
+      "pid": 11016,
+      "python_version": "3.14.0"
+    },
+    {
+      "timestamp": "2026-03-04 15:30:46",
+      "pid": 66392,
+      "python_version": "3.14.0"
+    },
+    {
+      "timestamp": "2026-03-04 15:30:46",
+      "pid": 66392,
+      "python_version": "3.14.0"
+    },
+    {
+      "timestamp": "2026-03-04 15:30:46",
+      "pid": 66392,
+      "python_version": "3.14.0"
+    },
+    {
+      "timestamp": "2026-03-04 15:30:47",
+      "pid": 66392,
+      "python_version": "3.14.0"
+    },
+    {
+      "timestamp": "2026-03-04 15:30:47",
+      "pid": 66392,
+      "python_version": "3.14.0"
+    },
+    {
+      "timestamp": "2026-03-04 15:30:47",
+      "pid": 66392,
+      "python_version": "3.14.0"
+    },
+    {
+      "timestamp": "2026-03-04 15:30:47",
+      "pid": 66392,
+      "python_version": "3.14.0"
+    },
+    {
+      "timestamp": "2026-03-04 15:30:47",
+      "pid": 66392,
+      "python_version": "3.14.0"
+    },
+    {
+      "timestamp": "2026-03-04 15:30:47",
+      "pid": 66392,
+      "python_version": "3.14.0"
+    },
+    {
+      "timestamp": "2026-03-04 15:30:47",
+      "pid": 66392,
+      "python_version": "3.14.0"
+    },
+    {
+      "timestamp": "2026-03-04 15:30:47",
+      "pid": 66392,
+      "python_version": "3.14.0"
+    },
+    {
+      "timestamp": "2026-03-04 15:30:47",
+      "pid": 66392,
+      "python_version": "3.14.0"
+    },
+    {
+      "timestamp": "2026-03-04 15:30:47",
+      "pid": 66392,
+      "python_version": "3.14.0"
+    },
+    {
+      "timestamp": "2026-03-04 15:30:47",
+      "pid": 66392,
+      "python_version": "3.14.0"
+    },
+    {
+      "timestamp": "2026-03-04 15:30:48",
+      "pid": 66392,
+      "python_version": "3.14.0"
+    },
+    {
+      "timestamp": "2026-03-04 15:30:48",
+      "pid": 66392,
+      "python_version": "3.14.0"
+    },
+    {
+      "timestamp": "2026-03-04 15:30:48",
+      "pid": 66392,
+      "python_version": "3.14.0"
+    },
+    {
+      "timestamp": "2026-03-04 15:30:48",
+      "pid": 66392,
+      "python_version": "3.14.0"
+    },
+    {
+      "timestamp": "2026-03-04 15:30:48",
+      "pid": 66392,
+      "python_version": "3.14.0"
+    },
+    {
+      "timestamp": "2026-03-04 15:30:48",
+      "pid": 66392,
+      "python_version": "3.14.0"
+    },
+    {
+      "timestamp": "2026-03-04 15:30:48",
+      "pid": 66392,
+      "python_version": "3.14.0"
+    },
+    {
+      "timestamp": "2026-03-04 15:30:48",
+      "pid": 66392,
+      "python_version": "3.14.0"
+    },
+    {
+      "timestamp": "2026-03-04 15:30:48",
+      "pid": 66392,
+      "python_version": "3.14.0"
+    },
+    {
+      "timestamp": "2026-03-04 15:30:49",
+      "pid": 66392,
+      "python_version": "3.14.0"
+    },
+    {
+      "timestamp": "2026-03-04 15:30:49",
+      "pid": 66392,
+      "python_version": "3.14.0"
+    },
+    {
+      "timestamp": "2026-03-04 15:30:49",
+      "pid": 66392,
+      "python_version": "3.14.0"
+    },
+    {
+      "timestamp": "2026-03-04 15:30:49",
+      "pid": 66392,
+      "python_version": "3.14.0"
+    },
+    {
+      "timestamp": "2026-03-04 15:30:49",
+      "pid": 66392,
+      "python_version": "3.14.0"
+    },
+    {
+      "timestamp": "2026-03-04 15:30:49",
+      "pid": 66392,
+      "python_version": "3.14.0"
+    },
+    {
+      "timestamp": "2026-03-04 15:30:49",
+      "pid": 66392,
+      "python_version": "3.14.0"
+    },
+    {
+      "timestamp": "2026-03-04 15:30:49",
+      "pid": 66392,
+      "python_version": "3.14.0"
+    },
+    {
+      "timestamp": "2026-03-04 15:30:49",
+      "pid": 66392,
+      "python_version": "3.14.0"
+    },
+    {
+      "timestamp": "2026-03-04 15:30:49",
+      "pid": 66392,
+      "python_version": "3.14.0"
+    },
+    {
+      "timestamp": "2026-03-04 15:30:50",
+      "pid": 66392,
+      "python_version": "3.14.0"
+    },
+    {
+      "timestamp": "2026-03-04 15:30:50",
+      "pid": 66392,
+      "python_version": "3.14.0"
+    },
+    {
+      "timestamp": "2026-03-04 15:30:50",
+      "pid": 66392,
+      "python_version": "3.14.0"
+    },
+    {
+      "timestamp": "2026-03-04 15:30:50",
+      "pid": 66392,
+      "python_version": "3.14.0"
+    }
+  ],
+  "disconnects": [
+    {
+      "timestamp": "2026-03-04 13:23:47",
+      "messages": 0,
+      "errors": 0,
+      "dropped": 0
+    },
+    {
+      "timestamp": "2026-03-04 13:23:47",
+      "messages": 0,
+      "errors": 0,
+      "dropped": 0
+    },
+    {
+      "timestamp": "2026-03-04 13:23:47",
+      "messages": 0,
+      "errors": 0,
+      "dropped": 0
+    },
+    {
+      "timestamp": "2026-03-04 13:23:47",
+      "messages": 0,
+      "errors": 0,
+      "dropped": 0
+    },
+    {
+      "timestamp": "2026-03-04 13:23:48",
+      "messages": 0,
+      "errors": 0,
+      "dropped": 0
+    },
+    {
+      "timestamp": "2026-03-04 13:23:48",
+      "messages": 0,
+      "errors": 0,
+      "dropped": 0
+    },
+    {
+      "timestamp": "2026-03-04 13:25:07",
+      "messages": 0,
+      "errors": 0,
+      "dropped": 0
+    },
+    {
+      "timestamp": "2026-03-04 13:25:07",
+      "messages": 0,
+      "errors": 0,
+      "dropped": 0
+    },
+    {
+      "timestamp": "2026-03-04 13:25:07",
+      "messages": 0,
+      "errors": 0,
+      "dropped": 0
+    },
+    {
+      "timestamp": "2026-03-04 13:25:08",
+      "messages": 0,
+      "errors": 0,
+      "dropped": 0
+    },
+    {
+      "timestamp": "2026-03-04 13:25:08",
+      "messages": 0,
+      "errors": 0,
+      "dropped": 0
+    },
+    {
+      "timestamp": "2026-03-04 13:25:08",
+      "messages": 0,
+      "errors": 0,
+      "dropped": 0
+    },
+    {
+      "timestamp": "2026-03-04 15:30:49",
+      "messages": 0,
+      "errors": 0,
+      "dropped": 0
+    },
+    {
+      "timestamp": "2026-03-04 15:30:49",
+      "messages": 0,
+      "errors": 0,
+      "dropped": 0
+    },
+    {
+      "timestamp": "2026-03-04 15:30:50",
+      "messages": 0,
+      "errors": 0,
+      "dropped": 0
+    },
+    {
+      "timestamp": "2026-03-04 15:30:50",
+      "messages": 0,
+      "errors": 0,
+      "dropped": 0
+    },
+    {
+      "timestamp": "2026-03-04 15:30:50",
+      "messages": 0,
+      "errors": 0,
+      "dropped": 0
+    },
+    {
+      "timestamp": "2026-03-04 15:30:50",
+      "messages": 0,
+      "errors": 0,
+      "dropped": 0
+    }
+  ],
+  "decode_errors": [
+    {
+      "timestamp": "2026-03-04 13:23:45",
+      "arbitration_id_hex": "0x100",
+      "dlc": 8,
+      "data_hex": "0000000000000000",
+      "error": "bad data"
+    },
+    {
+      "timestamp": "2026-03-04 13:25:06",
+      "arbitration_id_hex": "0x100",
+      "dlc": 8,
+      "data_hex": "0000000000000000",
+      "error": "bad data"
+    },
+    {
+      "timestamp": "2026-03-04 15:30:48",
+      "arbitration_id_hex": "0x100",
+      "dlc": 8,
+      "data_hex": "0000000000000000",
+      "error": "bad data"
+    }
+  ]
+}
